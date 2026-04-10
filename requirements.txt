@@ -1,33 +1,50 @@
-# Humanoid NLP Module: Core Dependencies
-# Optimized for CPU/Laptop testing, will switch to Jetson on deployment
-# NOTE: Install phi3 model with: ollama pull phi3
+# Humanoid NLP Module — Complete Dependencies
+# GPU primary, CPU fallback handled at runtime via entrypoint.sh
 
-# Foundation & Schemas
+# ── Foundation & Schemas ──────────────────────────────────────────────────
 pydantic>=2.0.0
 python-dotenv
 
-# ASR (Automatic Speech Recognition)
+# ── ASR (Automatic Speech Recognition) ───────────────────────────────────
 faster-whisper>=1.0.0
 
-# TTS (Text-to-Speech)
+# ── Wake Word Detection ────────────────────────────────────────────────────
+openwakeword>=0.6.0
+
+# ── TTS (Text-to-Speech) ──────────────────────────────────────────────────
 piper-tts>=1.2.0
 
-# Audio Processing & VAD
+# ── Audio Processing & VAD ─────────────────────────────────────────────────
+# NOTE: onnxruntime is replaced by onnxruntime-gpu in Docker/GPU environments.
+# The entrypoint script handles this swap automatically.
 onnxruntime>=1.15.0
 numpy<2.0.0
 requests
 sounddevice
 pyaudio
 
-# Dialogue & Intelligence
-langgraph>=0.0.10
-langchain>=0.1.0
+# ── LLM Providers ─────────────────────────────────────────────────────────
+# Groq cloud inference
+groq>=0.4.0
+# Ollama local inference (Python client)
+ollama>=0.1.8
+# OpenAI-compatible (Enterprise / GPT-4o)
+openai>=1.0.0
+# Async HTTP for raw Ollama API calls
 httpx
 
-# Memory & RAG
+# ── Dialogue & Intelligence ────────────────────────────────────────────────
+langgraph>=0.0.10
+langchain>=0.1.0
+
+# ── Memory & RAG ──────────────────────────────────────────────────────────
 chromadb>=0.4.0
 
-# Enterprise Integration (VMS, ChatGPT)
+# ── Enterprise Integration (REST API server) ──────────────────────────────
 fastapi>=0.100.0
 uvicorn
-openai
+
+# ── Robot Hardware (optional — only needed for G1 mode) ───────────────────
+# Install manually: pip install unitree_sdk2py
+# or follow: https://github.com/unitreerobotics/unitree_sdk2_python
+# unitree_sdk2py
