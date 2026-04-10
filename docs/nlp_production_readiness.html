@@ -1,0 +1,72 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+.section { margin-bottom: 1.25rem; }
+.sec-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.sec-title { font-size: 13px; font-weight: 500; color: var(--color-text-primary); }
+.status { font-size: 10px; font-weight: 500; padding: 2px 8px; border-radius: 8px; }
+.done { background: #EAF3DE; color: #27500A; }
+.warn { background: #FAEEDA; color: #633806; }
+.gap  { background: #FCEBEB; color: #791F1F; }
+@media (prefers-color-scheme: dark) {
+  .done { background: #27500A; color: #C0DD97; }
+  .warn { background: #633806; color: #FAC775; }
+  .gap  { background: #791F1F; color: #F7C1C1; }
+}
+.items { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.item { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 8px 10px; display: flex; gap: 8px; align-items: flex-start; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
+.dot-g { background: #639922; }
+.dot-y { background: #BA7517; }
+.dot-r { background: #E24B4A; }
+.item-text { font-size: 11px; color: var(--color-text-primary); line-height: 1.5; }
+.item-sub { font-size: 10px; color: var(--color-text-secondary); margin-top: 2px; }
+</style>
+
+<div style="padding: 0.5rem 0;">
+
+<div class="section">
+  <div class="sec-header"><span class="sec-title">Latency optimizations</span><span class="status warn">implement in phase 1–2</span></div>
+  <div class="items">
+    <div class="item"><span class="dot dot-y"></span><div><div class="item-text">Whisper int8 quantization on Jetson</div><div class="item-sub">Cuts ASR time from 800ms → 380ms. Use ONNX Runtime or TensorRT.</div></div></div>
+    <div class="item"><span class="dot dot-y"></span><div><div class="item-text">Streaming TTS — speak before full response</div><div class="item-sub">Buffer 15 tokens, start audio. Perceived latency drops by ~1s.</div></div></div>
+    <div class="item"><span class="dot dot-y"></span><div><div class="item-text">Parallel intent + entity extraction</div><div class="item-sub">asyncio.gather() — run together, not sequentially.</div></div></div>
+    <div class="item"><span class="dot dot-y"></span><div><div class="item-text">Redis cache for repeat queries</div><div class="item-sub">FAQ answers, room lookups, schedule queries. Cache TTL = 5 minutes.</div></div></div>
+    <div class="item"><span class="dot dot-y"></span><div><div class="item-text">VAD pre-warming of context</div><div class="item-sub">Load session state from Redis the moment speech onset is detected.</div></div></div>
+    <div class="item"><span class="dot dot-y"></span><div><div class="item-text">GPT-4o mini for intent, GPT-4o for generation</div><div class="item-sub">Mini is 3× faster and sufficient for classification tasks.</div></div></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="sec-header"><span class="sec-title">Reliability + failure handling</span><span class="status gap">critical gaps to close</span></div>
+  <div class="items">
+    <div class="item"><span class="dot dot-r"></span><div><div class="item-text">Graceful ASR failure handling</div><div class="item-sub">If Whisper confidence &lt;0.6, robot says "Could you repeat that?" — not crash or silence.</div></div></div>
+    <div class="item"><span class="dot dot-r"></span><div><div class="item-text">LLM timeout fallback</div><div class="item-sub">Set 3s hard timeout. If exceeded, use scripted fallback: "Let me check and get back to you."</div></div></div>
+    <div class="item"><span class="dot dot-r"></span><div><div class="item-text">Network partition handling</div><div class="item-sub">If LAN server unreachable, Jetson falls back to on-device Llama 3.2-3B for basic responses.</div></div></div>
+    <div class="item"><span class="dot dot-r"></span><div><div class="item-text">Conversation repair logic</div><div class="item-sub">Detect topic switch mid-conversation. Reset state cleanly — don't carry stale entities.</div></div></div>
+    <div class="item"><span class="dot dot-r"></span><div><div class="item-text">Wake-word or proximity trigger</div><div class="item-sub">Don't run ASR 24/7. Trigger only when someone is &lt;1.5m away (LiDAR) or says wake word.</div></div></div>
+    <div class="item"><span class="dot dot-r"></span><div><div class="item-text">Input sanitization before LLM</div><div class="item-sub">Strip prompt injection attempts. Enforce topic boundary — robot only talks about office-relevant topics.</div></div></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="sec-header"><span class="sec-title">Production infrastructure</span><span class="status warn">plan from week 1</span></div>
+  <div class="items">
+    <div class="item"><span class="dot dot-y"></span><div><div class="item-text">Docker containers for all services</div><div class="item-sub">ASR service, dialogue service, RAG service, TTS service — each independently restartable.</div></div></div>
+    <div class="item"><span class="dot dot-y"></span><div><div class="item-text">Watchdog + auto-restart</div><div class="item-sub">systemd or supervisord. If any NLP service crashes, restart within 3 seconds — robot shouldn't freeze.</div></div></div>
+    <div class="item"><span class="dot dot-g"></span><div><div class="item-text">Health check endpoints</div><div class="item-sub">FastAPI /health on each service. LAN server pings every 10s. Robotics team can query NLP status.</div></div></div>
+    <div class="item"><span class="dot dot-y"></span><div><div class="item-text">Model versioning</div><div class="item-sub">MLflow or DVC. Never push a new model directly to the G1 — version, test, then deploy.</div></div></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="sec-header"><span class="sec-title">What this architecture can't handle yet (honest gaps)</span><span class="status gap">phase 3–4 or future</span></div>
+  <div class="items">
+    <div class="item"><span class="dot dot-r"></span><div><div class="item-text">Simultaneous multi-person conversation</div><div class="item-sub">Speaker diarization (pyannote) needed. Not in v1 scope — one speaker at a time.</div></div></div>
+    <div class="item"><span class="dot dot-r"></span><div><div class="item-text">Noisy environment robustness</div><div class="item-sub">Open office with AC and chatter degrades Whisper WER significantly. Add noise suppression (RNNoise) as preprocessing.</div></div></div>
+    <div class="item"><span class="dot dot-r"></span><div><div class="item-text">Truly adaptive learning in production</div><div class="item-sub">Online fine-tuning on the G1 is not feasible. Improvement cycle is: log → annotate → retrain offline → deploy. Weekly cadence.</div></div></div>
+    <div class="item"><span class="dot dot-r"></span><div><div class="item-text">Full offline RAG without LAN server</div><div class="item-sub">Jetson Orin has 16GB RAM. Running Whisper + Llama 3B + Chroma simultaneously will be tight. Needs profiling.</div></div></div>
+  </div>
+</div>
+
+</div>

@@ -1,0 +1,47 @@
+{
+  "hardware_mode": "laptop",
+  "g1": {
+    "dds_interface": "eth0",
+    "local_ip": "192.168.123.164",
+    "mic_device_name": "g1_microphone",
+    "speaker_player_args": ["-D", "alsa_output.g1_speaker"]
+  },
+  "llm": {
+    "mode": "local",
+    "groq": {
+      "model": "llama-3.1-8b-instant",
+      "temperature": 0.1,
+      "max_tokens": 150
+    },
+    "local": {
+      "model_name": "llama3.2:1b",
+      "base_url": "http://localhost:11434",
+      "temperature": 0.1,
+      "num_predict": 50,
+      "num_ctx": 512,
+      "keep_alive": "30m"
+    },
+    "enterprise": {
+      "model": "gpt-4o",
+      "base_url": "https://api.openai.com/v1",
+      "temperature": 0.1,
+      "max_tokens": 200
+    }
+  },
+  "tts": {
+    "mode": "local",
+    "model_path": "models/en_US-lessac-medium.onnx",
+    "hindi_model_path": "models/hi_IN-priyamvada-medium.onnx",
+    "player": "aplay"
+  },
+  "asr": {
+    "model_size": "tiny",
+    "device": "cpu",
+    "compute_type": "int8"
+  },
+  "wake_word": {
+    "model": "hey_jarvis_v0.1",
+    "display_name": "Jarvis",
+    "threshold": 0.5
+  }
+}

@@ -1,0 +1,119 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+.grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; padding: 0.5rem 0; }
+.card { border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-lg); padding: 1rem; background: var(--color-background-primary); }
+.card.recommended { border: 2px solid var(--color-border-info); }
+.badge { display: inline-block; font-size: 11px; font-weight: 500; padding: 3px 10px; border-radius: 10px; margin-bottom: 8px; }
+.badge-cloud { background: #FCEBEB; color: #A32D2D; }
+.badge-hybrid { background: #E6F1FB; color: #185FA5; }
+.badge-ondev { background: #E1F5EE; color: #085041; }
+.badge-rec { background: #E6F1FB; color: #0C447C; font-size: 10px; margin-left: 6px; }
+@media (prefers-color-scheme: dark) {
+  .badge-cloud { background: #791F1F; color: #F7C1C1; }
+  .badge-hybrid { background: #0C447C; color: #B5D4F4; }
+  .badge-ondev { background: #085041; color: #9FE1CB; }
+  .badge-rec { background: #0C447C; color: #B5D4F4; }
+}
+.card-title { font-size: 13px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 6px; }
+.row { display: flex; justify-content: space-between; align-items: baseline; padding: 5px 0; border-bottom: 0.5px solid var(--color-border-tertiary); font-size: 12px; }
+.row:last-of-type { border-bottom: none; }
+.row-label { color: var(--color-text-secondary); }
+.row-val { font-weight: 500; color: var(--color-text-primary); text-align: right; max-width: 55%; font-size: 11px; }
+.good { color: #3B6D11; }
+.bad { color: #A32D2D; }
+.mid { color: #854F0B; }
+@media (prefers-color-scheme: dark) {
+  .good { color: #97C459; }
+  .bad { color: #F09595; }
+  .mid { color: #EF9F27; }
+}
+.note { font-size: 11px; color: var(--color-text-secondary); margin-top: 10px; line-height: 1.5; }
+
+.section-title { font-size: 13px; font-weight: 500; color: var(--color-text-primary); margin: 1.25rem 0 0.5rem; }
+.stack-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 0.5rem; }
+.chip { font-size: 11px; padding: 3px 8px; border-radius: 4px; border: 0.5px solid var(--color-border-secondary); color: var(--color-text-secondary); background: var(--color-background-secondary); }
+.chip.on { background: #E1F5EE; border-color: #5DCAA5; color: #085041; }
+.chip.cloud { background: #FAEEDA; border-color: #EF9F27; color: #633806; }
+.chip.opt { background: #EEEDFE; border-color: #AFA9EC; color: #3C3489; }
+@media (prefers-color-scheme: dark) {
+  .chip.on { background: #085041; border-color: #1D9E75; color: #9FE1CB; }
+  .chip.cloud { background: #633806; border-color: #BA7517; color: #FAC775; }
+  .chip.opt { background: #3C3489; border-color: #7F77DD; color: #CECBF6; }
+}
+.legend-row { display: flex; gap: 16px; font-size: 11px; color: var(--color-text-secondary); margin-bottom: 0.75rem; flex-wrap: wrap; }
+.legend-row span { display: flex; align-items: center; gap: 5px; }
+.dot { width: 8px; height: 8px; border-radius: 2px; }
+</style>
+
+<div style="padding: 0.5rem 0;">
+
+<div class="grid">
+  <div class="card">
+    <span class="badge badge-cloud">Full cloud</span>
+    <div class="card-title">Everything via internet</div>
+    <div class="row"><span class="row-label">Latency</span><span class="row-val bad">3–8s (network RTT)</span></div>
+    <div class="row"><span class="row-label">Offline capability</span><span class="row-val bad">Zero</span></div>
+    <div class="row"><span class="row-label">Voice quality</span><span class="row-val good">Excellent</span></div>
+    <div class="row"><span class="row-label">Setup complexity</span><span class="row-val good">Low</span></div>
+    <div class="row"><span class="row-label">Data privacy</span><span class="row-val bad">All audio leaves premises</span></div>
+    <div class="row"><span class="row-label">Monthly cost</span><span class="row-val mid">High (API usage)</span></div>
+    <div class="note">Viable for demos. Not viable for production in a corporate environment — every conversation goes to OpenAI/Google servers.</div>
+  </div>
+
+  <div class="card recommended">
+    <span class="badge badge-hybrid">Hybrid (recommended)</span><span class="badge badge-rec">best for this project</span>
+    <div class="card-title">On-device core + LAN server</div>
+    <div class="row"><span class="row-label">Latency</span><span class="row-val good">&lt;1.5s (LAN only)</span></div>
+    <div class="row"><span class="row-label">Offline capability</span><span class="row-val good">Full core functionality</span></div>
+    <div class="row"><span class="row-label">Voice quality</span><span class="row-val good">Good to excellent</span></div>
+    <div class="row"><span class="row-label">Setup complexity</span><span class="row-val mid">Medium</span></div>
+    <div class="row"><span class="row-label">Data privacy</span><span class="row-val good">Audio stays on-premises</span></div>
+    <div class="row"><span class="row-label">Monthly cost</span><span class="row-val good">Low after infra setup</span></div>
+    <div class="note">ASR + intent on Jetson. LLM on an on-premises GPU server (1× RTX 4090 or A10G). Optional internet for external APIs only (weather, VMS).</div>
+  </div>
+
+  <div class="card">
+    <span class="badge badge-ondev">Fully on-device</span>
+    <div class="card-title">Everything on Jetson Orin</div>
+    <div class="row"><span class="row-label">Latency</span><span class="row-val good">&lt;2s</span></div>
+    <div class="row"><span class="row-label">Offline capability</span><span class="row-val good">Complete</span></div>
+    <div class="row"><span class="row-label">Voice quality</span><span class="row-val mid">Acceptable (smaller models)</span></div>
+    <div class="row"><span class="row-label">Setup complexity</span><span class="row-val bad">High (model optimization)</span></div>
+    <div class="row"><span class="row-label">Data privacy</span><span class="row-val good">Maximum</span></div>
+    <div class="row"><span class="row-label">Monthly cost</span><span class="row-val good">Near zero</span></div>
+    <div class="note">Jetson Orin NX at 100 TOPS can run Whisper + Llama 3.2-3B + Coqui. Tight on memory (16GB). LLM quality noticeably lower than GPT-4o.</div>
+  </div>
+</div>
+
+<div class="section-title">Recommended hybrid stack — component placement</div>
+<div class="legend-row">
+  <span><span class="dot" style="background:#1D9E75"></span>Runs on Jetson Orin (G1)</span>
+  <span><span class="dot" style="background:#EF9F27"></span>Runs on LAN server (on-premises)</span>
+  <span><span class="dot" style="background:#7F77DD"></span>Optional cloud (internet needed)</span>
+</div>
+
+<div class="stack-row">
+  <span class="chip on">Silero VAD — Jetson</span>
+  <span class="chip on">Whisper int8 — Jetson</span>
+  <span class="chip on">fastText lang-ID — Jetson</span>
+  <span class="chip on">spaCy NER — Jetson</span>
+  <span class="chip on">Redis session store — Jetson</span>
+  <span class="chip on">Coqui TTS — Jetson</span>
+  <span class="chip on">Action dispatcher — Jetson</span>
+</div>
+<div class="stack-row">
+  <span class="chip cloud">Llama 3.1-8B / Mistral — LAN GPU server</span>
+  <span class="chip cloud">LlamaIndex RAG — LAN server</span>
+  <span class="chip cloud">Chroma vector DB — LAN server</span>
+  <span class="chip cloud">Dialogue manager — LAN server</span>
+  <span class="chip cloud">TimescaleDB logs — LAN server</span>
+</div>
+<div class="stack-row">
+  <span class="chip opt">Google Calendar API — internet (optional)</span>
+  <span class="chip opt">VMS API — internet (optional)</span>
+  <span class="chip opt">Weather API — internet (optional)</span>
+  <span class="chip opt">GPT-4o fallback — internet (optional)</span>
+</div>
+
+</div>

@@ -1,0 +1,33 @@
+# Humanoid NLP Module: Core Dependencies
+# Optimized for CPU/Laptop testing, will switch to Jetson on deployment
+# NOTE: Install phi3 model with: ollama pull phi3
+
+# Foundation & Schemas
+pydantic>=2.0.0
+python-dotenv
+
+# ASR (Automatic Speech Recognition)
+faster-whisper>=1.0.0
+
+# TTS (Text-to-Speech)
+piper-tts>=1.2.0
+
+# Audio Processing & VAD
+onnxruntime>=1.15.0
+numpy<2.0.0
+requests
+sounddevice
+pyaudio
+
+# Dialogue & Intelligence
+langgraph>=0.0.10
+langchain>=0.1.0
+httpx
+
+# Memory & RAG
+chromadb>=0.4.0
+
+# Enterprise Integration (VMS, ChatGPT)
+fastapi>=0.100.0
+uvicorn
+openai

@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment Variables (CRITICAL: Never push keys)
+.env
+.env.local
+.env.*.local
+
+# Models & Data (Large files)
+models/
+data/
+chroma_db/
+*.bin
+*.pt
+*.pth
+
+# Audio & Logs
+logs/
+*.log
+records/
+*.wav
+/tmp/g1_mic.pipe
+/tmp/g1_spk.pipe
+/tmp/g1_audio_driver.pid
+
+# IDEs & System
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Project Specific
+.codex
+.system_generated/

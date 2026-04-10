@@ -1,0 +1,154 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+.phase { border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-lg); padding: 1rem 1.25rem; margin-bottom: 1rem; background: var(--color-background-primary); }
+.phase-header { display: flex; align-items: center; gap: 10px; margin-bottom: 0.75rem; }
+.phase-badge { font-size: 11px; font-weight: 500; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }
+.p1 { background: #E1F5EE; color: #085041; }
+.p2 { background: #EEEDFE; color: #3C3489; }
+.p3 { background: #FAEEDA; color: #633806; }
+.p4 { background: #EAF3DE; color: #27500A; }
+@media (prefers-color-scheme: dark) {
+  .p1 { background: #085041; color: #9FE1CB; }
+  .p2 { background: #3C3489; color: #CECBF6; }
+  .p3 { background: #633806; color: #FAC775; }
+  .p4 { background: #27500A; color: #C0DD97; }
+}
+.phase-title { font-size: 14px; font-weight: 500; color: var(--color-text-primary); }
+.phase-weeks { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }
+.task-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+.task-card { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 10px 12px; }
+.task-name { font-size: 12px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 4px; }
+.task-detail { font-size: 11px; color: var(--color-text-secondary); line-height: 1.5; }
+.task-stack { font-size: 10px; color: var(--color-text-tertiary); margin-top: 5px; border-top: 0.5px solid var(--color-border-tertiary); padding-top: 4px; }
+.deliverable { font-size: 11px; color: var(--color-text-secondary); margin-top: 0.75rem; padding-top: 0.5rem; border-top: 0.5px solid var(--color-border-tertiary); }
+.deliv-label { font-weight: 500; color: var(--color-text-primary); }
+</style>
+
+<div style="padding: 0.5rem 0;">
+
+<div class="phase">
+  <div class="phase-header">
+    <span class="phase-badge p1">Phase 1</span>
+    <span class="phase-title">Core pipeline — voice in, voice out</span>
+    <span class="phase-weeks">Weeks 1–4</span>
+  </div>
+  <div class="task-grid">
+    <div class="task-card">
+      <div class="task-name">ASR setup</div>
+      <div class="task-detail">Deploy Whisper large-v3 on Jetson Orin. Add VAD (Silero) to detect speech start/end. Benchmark WER on Telugu, Hindi, English samples.</div>
+      <div class="task-stack">Whisper, Silero VAD, Python, ONNX</div>
+    </div>
+    <div class="task-card">
+      <div class="task-name">Language identification</div>
+      <div class="task-detail">Route detected utterances to the correct downstream model. fastText lid.176 gives sub-10ms language detection.</div>
+      <div class="task-stack">fastText, langdetect</div>
+    </div>
+    <div class="task-card">
+      <div class="task-name">Basic intent classifier</div>
+      <div class="task-detail">Build intent taxonomy: greet, navigate, query, remind, handoff. Start with zero-shot GPT-4o; collect data to fine-tune later.</div>
+      <div class="task-stack">GPT-4o, LangChain, spaCy</div>
+    </div>
+    <div class="task-card">
+      <div class="task-name">TTS baseline</div>
+      <div class="task-detail">Integrate ElevenLabs (cloud) or Coqui TTS (on-device) for response speech. Test latency at Jetson Orin level for real-time feel.</div>
+      <div class="task-stack">ElevenLabs API, Coqui, pyttsx3</div>
+    </div>
+  </div>
+  <div class="deliverable"><span class="deliv-label">Deliverable:</span> End-to-end demo — person speaks, robot responds in correct language. Latency &lt;3s round-trip.</div>
+</div>
+
+<div class="phase">
+  <div class="phase-header">
+    <span class="phase-badge p2">Phase 2</span>
+    <span class="phase-title">Understanding layer — entities, context, dialogue state</span>
+    <span class="phase-weeks">Weeks 5–8</span>
+  </div>
+  <div class="task-grid">
+    <div class="task-card">
+      <div class="task-name">Entity extraction</div>
+      <div class="task-detail">Person names, room numbers, times, company-specific terms. Use spaCy with a custom NER model trained on office-domain data.</div>
+      <div class="task-stack">spaCy, Prodigy (annotation), custom NER</div>
+    </div>
+    <div class="task-card">
+      <div class="task-name">Dialogue manager</div>
+      <div class="task-detail">Build conversation state machine using LangGraph. Handle multi-turn flows like "take me to Room 5" → "which floor?" → walk action.</div>
+      <div class="task-stack">LangGraph, Rasa Core (optional), Redis</div>
+    </div>
+    <div class="task-card">
+      <div class="task-name">Context injector</div>
+      <div class="task-detail">Enrich every LLM prompt with: current time, known visitor identity, room the robot is in, last 3 conversation turns.</div>
+      <div class="task-stack">FastAPI middleware, Redis session store</div>
+    </div>
+    <div class="task-card">
+      <div class="task-name">Sentiment / affect detection</div>
+      <div class="task-detail">Classify frustration, urgency, formality. Adapt robot tone accordingly — more formal with executives, friendlier with guests.</div>
+      <div class="task-stack">XLM-RoBERTa, HuggingFace Transformers</div>
+    </div>
+  </div>
+  <div class="deliverable"><span class="deliv-label">Deliverable:</span> Multi-turn dialogue that retains context across 5+ turns. Entity extraction F1 &gt;0.85 on office domain test set.</div>
+</div>
+
+<div class="phase">
+  <div class="phase-header">
+    <span class="phase-badge p3">Phase 3</span>
+    <span class="phase-title">Reasoning layer — RAG, tool use, action dispatch</span>
+    <span class="phase-weeks">Weeks 9–14</span>
+  </div>
+  <div class="task-grid">
+    <div class="task-card">
+      <div class="task-name">RAG knowledge base</div>
+      <div class="task-detail">Index company FAQ, visitor directory, room map, leadership profiles into Chroma. Build retrieval pipeline with re-ranking.</div>
+      <div class="task-stack">LlamaIndex, Chroma, OpenAI embeddings, cross-encoder re-ranker</div>
+    </div>
+    <div class="task-card">
+      <div class="task-name">LLM tool calling</div>
+      <div class="task-detail">Define function schemas for calendar lookup, visitor check-in, weather fetch, room status. LLM decides when to call which tool.</div>
+      <div class="task-stack">GPT-4o function calling, FastAPI tool gateway</div>
+    </div>
+    <div class="task-card">
+      <div class="task-name">Action dispatcher</div>
+      <div class="task-detail">Translate NLP output into structured action commands for the robotics team API: navigate(room_id), gesture(wave), fetch(item).</div>
+      <div class="task-stack">Pydantic action schemas, ROS 2 bridge, REST API</div>
+    </div>
+    <div class="task-card">
+      <div class="task-name">Safety + guardrails</div>
+      <div class="task-detail">Add output filtering: PII scrubbing, topic boundary enforcement, hallucination confidence thresholds before response is spoken.</div>
+      <div class="task-stack">Guardrails AI, Llama Guard, custom rule layer</div>
+    </div>
+  </div>
+  <div class="deliverable"><span class="deliv-label">Deliverable:</span> Robot can answer "Where is Dr. Kumar's meeting?" by fetching calendar + greeting the visitor by name. Action dispatch integration verified with robotics team.</div>
+</div>
+
+<div class="phase">
+  <div class="phase-header">
+    <span class="phase-badge p4">Phase 4</span>
+    <span class="phase-title">Observability, eval loop, and hardening</span>
+    <span class="phase-weeks">Weeks 15–18</span>
+  </div>
+  <div class="task-grid">
+    <div class="task-card">
+      <div class="task-name">Interaction logging</div>
+      <div class="task-detail">Log every ASR transcript, intent, entity, action, and response to TimescaleDB. Build Grafana dashboard for real-time monitoring.</div>
+      <div class="task-stack">TimescaleDB, Grafana, Kafka</div>
+    </div>
+    <div class="task-card">
+      <div class="task-name">Eval pipeline</div>
+      <div class="task-detail">Track WER, intent classification F1, response BLEU/ROUGE, action accuracy, p95 latency. Run weekly regression tests.</div>
+      <div class="task-stack">DeepEval, pytest, MLflow</div>
+    </div>
+    <div class="task-card">
+      <div class="task-name">Human-in-the-loop annotation</div>
+      <div class="task-detail">Flag low-confidence interactions for human review. Annotated data feeds fine-tuning of intent classifier and NER model.</div>
+      <div class="task-stack">Label Studio, Prodigy, LoRA fine-tuning</div>
+    </div>
+    <div class="task-card">
+      <div class="task-name">Latency optimization</div>
+      <div class="task-detail">Profile end-to-end: ASR, LLM inference, TTS. Quantize Whisper to int8. Use streaming TTS so robot starts speaking before full response is generated.</div>
+      <div class="task-stack">ONNX Runtime, TensorRT, streaming TTS</div>
+    </div>
+  </div>
+  <div class="deliverable"><span class="deliv-label">Deliverable:</span> Production-ready NLP module. Intent F1 &gt;0.92, end-to-end latency &lt;2s, full observability dashboard live.</div>
+</div>
+
+</div>
