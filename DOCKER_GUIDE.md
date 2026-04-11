@@ -75,6 +75,50 @@ To use the robot's microphone and speaker while running inside Docker:
 
 ---
 
+### 4. Running on G1 Robot Hardware
+
+When deploying directly on the G1 robot (PC1 or PC2), follow these specific steps:
+
+#### A. Start the Hardware Bridge on the Host
+
+The `g1_audio_driver.py` should run on the robot's main OS (the host) to bridge the hardware to the system's PulseAudio server.
+
+```bash
+# In one terminal on the robot
+python3 services/hardware/g1_audio_driver.py
+```
+
+Wait until you see: `Joined multicast 239.168.123.161:5555`.
+
+#### B. Set G1 Mode in Environment
+
+Edit your `.env` file or set the variable before running:
+
+```bash
+echo "HARDWARE_MODE=g1" >> .env
+```
+
+#### C. PulseAudio Socket Verification
+
+If you are not using the default `unitree` user (UID 1000), verify where your PulseAudio socket is:
+
+```bash
+echo $PULSE_SERVER
+# If it shows something like /run/user/1001/pulse/native,
+# update the volume mount in docker-compose.yml accordingly.
+```
+
+#### D. Launch the Pipeline
+
+```bash
+docker compose up -d
+```
+
+> [!TIP]
+> **Performance Check**: If you are running on the G1's internal PC1 (intel core), you might not have an NVIDIA GPU. The `entrypoint.sh` will automatically detect this and switch to **CPU Fallback mode** (int8-quantization), ensuring the system still runs, albeit slightly slower.
+
+---
+
 ## 📝 Troubleshooting
 
 ### No Audio inside Container

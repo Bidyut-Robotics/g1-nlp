@@ -11,7 +11,8 @@ services:
     image: humanoid-nlp:latest
     container_name: humanoid_nlp
 
-    # ── NVIDIA GPU Access ──────────────────────────────────────────────────────
+    # ── NVIDIA GPU Access (Required for Jetson/G1) ──────────────────────────────
+    runtime: nvidia
     deploy:
       resources:
         reservations:
@@ -63,6 +64,7 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: humanoid_ollama
+    runtime: nvidia
 
     deploy:
       resources:

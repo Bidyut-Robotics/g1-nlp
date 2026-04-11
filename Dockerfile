@@ -65,9 +65,13 @@ COPY requirements.txt .
 # Core dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# GPU-specific: install onnxruntime-gpu as default inside the image.
-# The entrypoint will fall back to the CPU build if no GPU is detected at runtime.
-RUN pip install --no-cache-dir --force-reinstall "onnxruntime-gpu>=1.18.0"
+# NOTE: onnxruntime-gpu is notoriously difficult to install via pip on ARM64/Jetson.
+# We default to the 'onnxruntime' (CPU) package from requirements.txt for the image build.
+# Our entrypoint.sh will automatically use 'cpu/int8' modes if GPU acceleration isn't 
+# perfectly configured, ensuring the robot ALWAYS responds.
+#
+# If you are on x86_64 with a GPU and want maximum speed, you can manually run:
+# pip install onnxruntime-gpu
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Stage 3: App — final lean image
