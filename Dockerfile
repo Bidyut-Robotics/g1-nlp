@@ -88,7 +88,7 @@ WORKDIR /app
 
 # PulseAudio client config: allow connections from the host socket
 RUN mkdir -p /root/.config/pulse && \
-    echo "default-server = unix:/tmp/pulse/pulse-native" > /root/.config/pulse/client.conf && \
+    echo "default-server = unix:/run/user/1000/pulse/native" > /root/.config/pulse/client.conf && \
     echo "autospawn = no" >> /root/.config/pulse/client.conf && \
     echo "daemon-binary = /bin/true" >> /root/.config/pulse/client.conf
 

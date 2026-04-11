@@ -45,8 +45,8 @@ services:
       # ASR: use GPU inside container
       ASR_DEVICE: ${ASR_DEVICE:-cuda}
       ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-float16}
-      # PulseAudio server address (host socket)
-      PULSE_SERVER: unix:/tmp/pulse/pulse-native
+      # PulseAudio server address (host socket - standard Ubuntu location)
+      PULSE_SERVER: unix:/run/user/1000/pulse/native
       NVIDIA_DISABLE_REQUIRE: "true"
       NLP_DEBUG: ${NLP_DEBUG:-1}
 
