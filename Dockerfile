@@ -1,7 +1,8 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# Stage 1: Base — CUDA 12.4 + cuDNN + Ubuntu 22.04
+# Stage 1: Base — CUDA 11.8 + cuDNN 8 + Ubuntu 22.04
+# Match G1's 11.4 driver while allowing modern dependencies
 # ──────────────────────────────────────────────────────────────────────────────
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS base
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -64,6 +65,11 @@ COPY requirements.txt .
 
 # Core dependencies
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Download missing wake-word models (not included in the standard pip package)
+RUN mkdir -p /usr/local/lib/python3.11/dist-packages/openwakeword/resources/models/ && \
+    wget -q https://github.com/dscripka/openWakeWord/raw/main/openwakeword/resources/models/hey_jarvis_v0.1.onnx \
+    -O /usr/local/lib/python3.11/dist-packages/openwakeword/resources/models/hey_jarvis_v0.1.onnx
 
 # NOTE: onnxruntime-gpu is notoriously difficult to install via pip on ARM64/Jetson.
 # We default to the 'onnxruntime' (CPU) package from requirements.txt for the image build.

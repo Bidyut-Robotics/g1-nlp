@@ -47,6 +47,7 @@ services:
       ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-float16}
       # PulseAudio server address (host socket)
       PULSE_SERVER: unix:/tmp/pulse/pulse-native
+      NVIDIA_DISABLE_REQUIRE: "true"
       NLP_DEBUG: ${NLP_DEBUG:-1}
 
     # Share host network namespace for DDS/multicast (required for G1 mode)

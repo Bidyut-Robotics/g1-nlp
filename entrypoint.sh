@@ -12,12 +12,43 @@ echo "=================================================="
 echo " Humanoid NLP — Container Startup"
 echo "=================================================="
 
-# ── GPU detection ─────────────────────────────────────────────────────────────
+# ── Hardware Diagnostics ──────────────────────────────────────────────────────
+echo "[DIAGNOSTIC] Checking environment..."
+
+# 1. PulseAudio (Critical for audio)
+if pactl info &>/dev/null; then
+    echo "[OK] PulseAudio server reachable."
+else
+    echo "[WARNING] PulseAudio server NOT reachable. Check your socket mounts."
+fi
+
+# 2. NVIDIA iGPU (Critical for Jetson)
+if [ -e /dev/nvidia0 ]; then
+    echo "[OK] NVIDIA device node found."
+else
+    echo "[INFO] No NVIDIA device node. CUDA acceleration may fail."
+fi
+
+# 3. Wake Word Model (Critical for pipeline)
+MODEL_PATH="/usr/local/lib/python3.11/dist-packages/openwakeword/resources/models/hey_jarvis_v0.1.onnx"
+if [ -f "$MODEL_PATH" ]; then
+    echo "[OK] Wake-word model found: hey_jarvis_v0.1"
+else
+    echo "[ERROR] Wake-word model MISSING at $MODEL_PATH"
+fi
+echo "--------------------------------------------------"
+
+# ── GPU detection (Improved for Jetson/Orin) ──────────────────────────────────
 GPU_AVAILABLE=false
 if command -v nvidia-smi &>/dev/null && nvidia-smi --query-gpu=name --format=csv,noheader &>/dev/null; then
     GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
     GPU_AVAILABLE=true
-    echo "[HARDWARE] GPU detected: ${GPU_NAME}"
+    echo "[HARDWARE] NVIDIA GPU detected (via nvidia-smi): ${GPU_NAME}"
+elif [ -e /dev/nvidia0 ] || [ -d /sys/module/tegra_fuse ]; then
+    GPU_AVAILABLE=true
+    # Get Orin name if possible, else generic
+    GPU_NAME="NVIDIA Jetson/Orin (Integrated GPU)"
+    echo "[HARDWARE] NVIDIA iGPU detected (Jetson/Orin hardware found)"
 else
     echo "[HARDWARE] No NVIDIA GPU found — falling back to CPU mode"
 fi
