@@ -72,7 +72,6 @@ logger = logging.getLogger("g1audio")
 # Network
 MULTICAST_GROUP = "239.168.123.161"     # PC1 streams mic audio here
 MULTICAST_PORT = 5555                   # UDP port for multicast mic stream
-LOCAL_IP = "192.168.123.164"            # PC2 address (DDS interface)
 DDS_INTERFACE = os.environ.get("G1_DDS_INTERFACE", "eth0")
 
 # PCM format — same in both directions
@@ -195,6 +194,18 @@ dds = DDSAudio()
 
 
 # ─── PulseAudio helpers ──────────────────────────────────────────────────────
+def get_interface_ip(interface: str) -> str:
+    """Detect the IP address on the specified interface. Fallback to 127.0.0.1."""
+    try:
+        res = subprocess.check_output(["ip", "-4", "addr", "show", interface], text=True)
+        for line in res.splitlines():
+            if "inet " in line:
+                return line.strip().split()[1].split("/")[0]
+    except Exception as e:
+        logger.warning("Could not detect IP on %s: %s", interface, e)
+    return "127.0.0.1"
+
+
 def pa_run(cmd: list) -> Tuple[bool, str]:
     """Run a pactl/pacmd command. Returns (success, stdout)."""
     try:
@@ -343,6 +354,10 @@ def mic_thread(shutdown_event: threading.Event):
     last_stats = time.time()
 
     try:
+        # Auto-detect local IP for multicast membership
+        local_ip = get_interface_ip(DDS_INTERFACE)
+        logger.info("Using local IP %s on interface %s for multicast", local_ip, DDS_INTERFACE)
+
         # Create and configure multicast socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -351,7 +366,7 @@ def mic_thread(shutdown_event: threading.Event):
         sock.bind(("", MULTICAST_PORT))
         mreq = struct.pack("4s4s",
             socket.inet_aton(MULTICAST_GROUP),
-            socket.inet_aton(LOCAL_IP))
+            socket.inet_aton(local_ip))
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
         sock.settimeout(2.0)
         logger.info("Joined multicast %s:%d", MULTICAST_GROUP, MULTICAST_PORT)

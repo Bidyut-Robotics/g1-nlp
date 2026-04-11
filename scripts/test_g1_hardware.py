@@ -72,10 +72,49 @@ def test_speaker():
         client.PlayStop("diag_tool")
 
 
+def get_local_ip(interface):
+    """Detects the IP address on the specified network interface."""
+    import subprocess
+    try:
+        res = subprocess.check_output(["ip", "-4", "addr", "show", interface], text=True)
+        for line in res.splitlines():
+            if "inet " in line:
+                return line.strip().split()[1].split("/")[0]
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
 def test_microphone():
     """Captures multicast audio and transcribes it in real-time using Faster-Whisper."""
     from faster_whisper import WhisperModel
+    from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+    from unitree_sdk2py.rpc.client import Client
     import numpy as np
+    import json
+
+    # Auto-detect IP
+    local_ip = get_local_ip(DDS_INTERFACE)
+    print(f"📡 Using local IP {local_ip} on {DDS_INTERFACE}")
+
+    # Initialize DDS to enable mic streaming
+    print(f"🔊 Initializing DDS to enable MIC streaming...")
+    ChannelFactoryInitialize(0, DDS_INTERFACE)
+    time.sleep(0.5)
+    
+    # Unitree Voice Service API for setting mode
+    API_SET_MODE = 1008
+    voice_client = Client("voice", False)
+    voice_client.SetTimeout(5.0)
+    voice_client._SetApiVerson("1.0.0.0")
+    voice_client._RegistApi(API_SET_MODE, 0)
+    
+    print("📢 Sending command to start robot microphone stream...")
+    code, _ = voice_client._Call(API_SET_MODE, json.dumps({"mode": 1})) # 1 = Active
+    if code != 0:
+        print(f"⚠️ Warning: Could not enable mic mode (code={code}). Check if PC1 voice service is running.")
+    else:
+        print("✅ Mic mode enabled.")
 
     print(f"🎤 Testing G1 Microphone with Real-time ASR (UDP Multicast on {MULTICAST_GROUP}:{MULTICAST_PORT})...")
     
@@ -90,7 +129,7 @@ def test_microphone():
     
     mreq = struct.pack("4s4s", 
                        socket.inet_aton(MULTICAST_GROUP), 
-                       socket.inet_aton(LOCAL_IP))
+                       socket.inet_aton(local_ip))
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
     sock.settimeout(5.0)
     
@@ -125,12 +164,15 @@ def test_microphone():
                     
                     buffer = bytearray() # Clear buffer
             except socket.timeout:
-                print("\n❌ ERROR: No audio data received! Check your network/multicast settings.")
+                print("\n❌ ERROR: No audio data received! Multicast group joined but no packets arriving.")
+                print("💡 Try this: systemctl stop ufw  (temporary firewall check)")
                 break
 
     except KeyboardInterrupt:
         print("\n⏹️ Interrupted")
     finally:
+        print("\n📢 Resetting robot mic to idle mode...")
+        voice_client._Call(API_SET_MODE, json.dumps({"mode": 2})) # 2 = Idle
         sock.close()
 
 
