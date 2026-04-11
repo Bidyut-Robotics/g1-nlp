@@ -32,7 +32,6 @@ ENV/
 .env.*.local
 
 # Models & Data (Large files)
-models/
 data/
 chroma_db/
 *.bin

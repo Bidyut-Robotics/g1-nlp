@@ -23,7 +23,7 @@ else
 fi
 
 # 2. NVIDIA iGPU (Critical for Jetson)
-if [ -e /dev/nvidia0 ]; then
+if [bn -e /dev/nvidia0 ]; then
     echo "[OK] NVIDIA device node found."
 else
     echo "[INFO] No NVIDIA device node. CUDA acceleration may fail."
