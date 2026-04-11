@@ -257,10 +257,17 @@ class LiveAudioPipeline:
             tts_worker_task = asyncio.create_task(self._tts_worker())
 
         try:
+            parsed_device = None
+            if self.device:
+                try:
+                    parsed_device = int(self.device)
+                except ValueError:
+                    parsed_device = self.device
+
             with sd.InputStream(
                 samplerate=WAKEWORD_SAMPLE_RATE,
                 blocksize=WAKEWORD_BLOCK_SIZE,
-                device=int(self.device) if self.device else None,
+                device=parsed_device,
                 channels=1,
                 dtype="int16",
                 callback=self._audio_callback,
