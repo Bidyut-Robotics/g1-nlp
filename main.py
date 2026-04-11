@@ -65,11 +65,25 @@ class LiveAudioPipeline:
 
         self.wakeword_name = os.getenv("WAKEWORD_MODEL", ww_cfg.get("model", "hey_jarvis_v0.1"))
         self.wakeword_key = pathlib.Path(self.wakeword_name).stem.replace(" ", "_")
-        self.wakeword_model = Model(wakeword_models=[self.wakeword_name], inference_framework="onnx")
+        
+        # ── Initialize Wake Word engine ────────────────────────────────────────
+        try:
+            # If it's a path, ensure it exists
+            if "/" in self.wakeword_name or self.wakeword_name.endswith(".onnx"):
+                model_path = os.path.abspath(self.wakeword_name)
+                print(f"[WAKEWORD] Loading custom model from path: {model_path}")
+                if not os.path.exists(model_path):
+                    raise FileNotFoundError(f"Wake-word model file not found at: {model_path}")
+                self.wakeword_model = Model(wakeword_models=[model_path], inference_framework="onnx")
+            else:
+                print(f"[WAKEWORD] Initialized with standard name: '{self.wakeword_name}'")
+                self.wakeword_model = Model(wakeword_models=[self.wakeword_name], inference_framework="onnx")
+        except Exception as e:
+            print(f"\n[NLP ERROR] Failed to load wake-word model: {e}")
+            sys.exit(0) # Exit cleanly to avoid container loop thrashing
+
         self.wakeword_threshold = float(os.getenv("WAKEWORD_THRESHOLD", ww_cfg.get("threshold", "0.5")))
         self.wakeword_display = os.getenv("WAKEWORD_DISPLAY", ww_cfg.get("display_name", WAKEWORD_DISPLAY_NAME))
-
-        print(f"[WAKEWORD] Initialized: model='{self.wakeword_name}', key='{self.wakeword_key}', threshold={self.wakeword_threshold}")
         self.tts_config = get_tts_config()
         hw_tts_player = hw_cfg.get("tts_player", self.tts_config.get("player", "aplay"))
         self.tts_player = os.getenv("TTS_PLAYER", hw_tts_player)

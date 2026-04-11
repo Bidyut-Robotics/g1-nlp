@@ -23,16 +23,17 @@ else
 fi
 
 # 2. NVIDIA iGPU (Critical for Jetson)
-if [bn -e /dev/nvidia0 ]; then
+if [ -e /dev/nvidia0 ]; then
     echo "[OK] NVIDIA device node found."
 else
     echo "[INFO] No NVIDIA device node. CUDA acceleration may fail."
 fi
 
 # 3. Wake Word Model (Critical for pipeline)
-MODEL_PATH="/usr/local/lib/python3.11/dist-packages/openwakeword/resources/models/hey_jarvis_v0.1.onnx"
+# Look for the model at the local mounted path first
+MODEL_PATH="/app/models/hey_jarvis_v0.1.onnx"
 if [ -f "$MODEL_PATH" ]; then
-    echo "[OK] Wake-word model found: hey_jarvis_v0.1"
+    echo "[OK] Wake-word model found at: $MODEL_PATH"
 else
     echo "[ERROR] Wake-word model MISSING at $MODEL_PATH"
 fi
