@@ -28,10 +28,14 @@ services:
     volumes:
       - /tmp/pulse:/tmp/pulse                # PulseAudio socket
       - /run/user/1000/pulse:/run/user/1000/pulse  # systemd user socket (fallback)
+      - ~/.config/pulse/cookie:/root/.config/pulse/cookie:ro # Authentication cookie
       - ./config:/app/config                 # live config reloading
       - ./models:/app/models                 # ONNX/Piper models
       - ./data:/app/data                     # ChromaDB persistent store
       - ./logs:/app/logs                     # Runtime logs
+
+    devices:
+      - /dev/snd:/dev/snd                    # Expose sound devices natively
 
     environment:
       # Hardware mode: "laptop" or "g1"
