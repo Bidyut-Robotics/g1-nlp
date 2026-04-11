@@ -38,8 +38,8 @@ services:
       HARDWARE_MODE: ${HARDWARE_MODE:-laptop}
       # LLM provider: "local" (Ollama sidecar) or "groq"
       LLM_MODE: ${LLM_MODE:-local}
-      # Ollama URL points to the sidecar service
-      OLLAMA_BASE_URL: http://ollama:11434
+      # Ollama URL points to the local host (since we use host networking)
+      OLLAMA_BASE_URL: http://localhost:11434
       # Groq API key (loaded from .env, never hardcoded)
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       # ASR: use GPU inside container
@@ -82,12 +82,12 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
 
-    ports:
-      - "11434:11434"
+    # Share host network (avoids bridge issues and ensures localhost access)
+    network_mode: host
 
-    # Health check: wait until Ollama API is responsive
+    # Health check: use the binary itself to check status
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
       retries: 10
