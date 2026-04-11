@@ -66,6 +66,9 @@ COPY requirements.txt .
 # Core dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-download openwakeword base models (melspectrogram, embedding, silero)
+RUN python3 -c "import openwakeword; openwakeword.utils.download_models()"
+
 # NOTE: onnxruntime-gpu is notoriously difficult to install via pip on ARM64/Jetson.
 
 # NOTE: onnxruntime-gpu is notoriously difficult to install via pip on ARM64/Jetson.
