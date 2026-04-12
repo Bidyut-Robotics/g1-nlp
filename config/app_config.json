@@ -1,5 +1,12 @@
 {
   "hardware_mode": "laptop",
+  "robot_info": {
+    "name": "Jarvis",
+    "company": "Jindal Steel",
+    "location": "indal Steel, Delhi",
+    "role": "Office assistant robot"
+  },
+
   "g1": {
     "dds_interface": "eth0",
     "local_ip": "192.168.123.164",
@@ -16,9 +23,9 @@
     "local": {
       "model_name": "llama3.2:1b",
       "base_url": "http://localhost:11434",
-      "temperature": 0.1,
-      "num_predict": 50,
-      "num_ctx": 512,
+      "temperature": 0.7,
+      "num_predict": 200,
+      "num_ctx": 2048,
       "keep_alive": "30m"
     },
     "enterprise": {
@@ -35,13 +42,13 @@
     "player": "aplay"
   },
   "asr": {
-    "model_size": "tiny",
+    "model_size": "base",
     "device": "cpu",
     "compute_type": "int8"
   },
   "wake_word": {
-    "model": "/app/models/hey_jarvis_v0.1.onnx",
+    "model": "models/hey_jarvis_v0.1.onnx",
     "display_name": "Jarvis",
-    "threshold": 0.5
+    "threshold": 0.3
   }
 }

@@ -1,8 +1,16 @@
 import re
 import asyncio
+import datetime
 from typing import TypedDict, List, Dict, Any, Awaitable, Callable, Optional
 from core.interfaces import ILLMProvider
 from core.schemas import Utterance, NLPActionPayload
+from core.config import load_app_config
+
+# ─── Week 1 feature flags (set to True to re-enable in Week 2+) ──────────────
+WEEK1_PERSONA_ENABLED = False
+WEEK1_CALENDAR_ENABLED = False
+WEEK1_VMS_ENABLED = False
+WEEK1_NAVIGATION_ENABLED = False
 
 # Define the State for LangGraph-style flow
 class AgentState(TypedDict):
@@ -12,10 +20,14 @@ class AgentState(TypedDict):
     next_step: str
     extracted_actions: List[NLPActionPayload]
     response_text: str
+    exit_intent: bool   # True when user wants to end the conversation
 
-from services.memory.memory_manager import PersonasMemory
-from tools.mcp_calendar import CalendarMCPTool
-from services.integration.vms_service import VMSService
+if WEEK1_PERSONA_ENABLED:
+    from services.memory.memory_manager import PersonasMemory
+if WEEK1_CALENDAR_ENABLED:
+    from tools.mcp_calendar import CalendarMCPTool
+if WEEK1_VMS_ENABLED:
+    from services.integration.vms_service import VMSService
 
 class DialogueManager:
     """
@@ -24,10 +36,18 @@ class DialogueManager:
     """
     def __init__(self, llm_provider: ILLMProvider):
         self.llm = llm_provider
-        self.memory = PersonasMemory()
-        self.calendar = CalendarMCPTool()
-        self.vms = VMSService()
+        self.memory = PersonasMemory() if WEEK1_PERSONA_ENABLED else None
+        self.calendar = CalendarMCPTool() if WEEK1_CALENDAR_ENABLED else None
+        self.vms = VMSService() if WEEK1_VMS_ENABLED else None
         self.sessions: Dict[str, AgentState] = {}
+
+        # Load robot factual identity from config (used by fast-path handler)
+        app_cfg = load_app_config()
+        ri = app_cfg.get("robot_info", {})
+        self.robot_name = ri.get("name", "Jarvis")
+        self.robot_company = ri.get("company", "this company")
+        self.robot_location = ri.get("location", "this office")
+        self.robot_role = ri.get("role", "office assistant robot")
 
     def get_or_create_session(self, session_id: str) -> AgentState:
         if session_id not in self.sessions:
@@ -36,8 +56,12 @@ class DialogueManager:
                 "context": {},
                 "next_step": "start",
                 "extracted_actions": [],
-                "response_text": ""
+                "response_text": "",
+                "exit_intent": False,
             }
+        else:
+            # Reset exit_intent at the start of each turn
+            self.sessions[session_id]["exit_intent"] = False
         return self.sessions[session_id]
 
     async def process_utterance(
@@ -60,24 +84,26 @@ class DialogueManager:
             state["messages"].append({"role": "assistant", "content": response_content})
             state["response_text"] = response_content
             state["extracted_actions"] = []
+            # exit_intent is set inside _handle_simple_query for stop/bye patterns
             return state
         
         # 2. Personalization: Inject Persona Profile if recognized (async)
-        person_id = state["context"].get("recognized_person_id")
-        if person_id:
-            profile = await self.memory.get_persona_async(person_id)
-            if profile:
-                state["context"]["person_profile"] = profile
+        if WEEK1_PERSONA_ENABLED and self.memory:
+            person_id = state["context"].get("recognized_person_id")
+            if person_id:
+                profile = await self.memory.get_persona_async(person_id)
+                if profile:
+                    state["context"]["person_profile"] = profile
 
         # 3. Add user message to history
         state["messages"].append({"role": "user", "content": utterance.text})
         state["context"]["language"] = utterance.language
-        state["context"]["schedule_query"] = self._is_schedule_query(utterance.text)
-        state["context"]["navigation_query"] = self._is_navigation_query(utterance.text)
+        state["context"]["schedule_query"] = self._is_schedule_query(utterance.text) if WEEK1_CALENDAR_ENABLED else False
+        state["context"]["navigation_query"] = self._is_navigation_query(utterance.text) if WEEK1_NAVIGATION_ENABLED else False
         
         # 4. OPTIMIZATION: Pre-fetch all tool results BEFORE LLM call (NO second pass)
         tool_results = {}
-        if state["context"]["schedule_query"]:
+        if WEEK1_CALENDAR_ENABLED and state["context"]["schedule_query"] and self.calendar:
             name = state["context"].get("person_profile", {}).get("name", "the user")
             try:
                 schedule_text = await self.calendar.get_schedule(name)
@@ -96,7 +122,7 @@ class DialogueManager:
         )
 
         # 6. VMS Integration (no second LLM pass)
-        if "[ACTION: CHECK_VISITOR]" in response_content:
+        if WEEK1_VMS_ENABLED and self.vms and "[ACTION: CHECK_VISITOR]" in response_content:
             name = re.search(r"CHECK_VISITOR\s*\{\s*'name':\s*'(.*?)'", response_content)
             if name:
                 try:
@@ -122,52 +148,66 @@ class DialogueManager:
         return state
 
     def _build_prompt(self, state: AgentState, tool_results: Dict[str, str] = None) -> str:
-        """
-        Constructs the final system prompt with persona and context injection.
-        OPTIMIZATION: Tool results are injected directly (no second pass needed).
-        """
         if tool_results is None:
             tool_results = {}
-            
-        history_str = "\n".join([f"{m['role']}: {m['content']}" for m in state["messages"]])
-        
-        # Identity injection
-        persona = state["context"].get("person_profile", {})
-        if persona:
-            identity_snip = (
-                f"User: {persona.get('name', 'Unknown')} | "
-                f"Role: {persona.get('role', 'Guest')} | "
-                f"Pref: {persona.get('pref', 'None')}"
-            )
-        else:
-            identity_snip = "User: Unknown | Role: Guest | Pref: None"
-        
-        # Inject tool results into context if available
-        tool_context = ""
-        if tool_results.get("calendar"):
-            tool_context = f"\n[CALENDAR INFORMATION]\n{tool_results['calendar']}"
-        
-        return f"""
-[SYSTEM CONTEXT]
-{identity_snip}{tool_context}
-Detected Language: {state['context'].get('language', 'English')} — reply in this language.
 
-[CONVERSATION HISTORY]
+        # Extract the last user message to give the model explicit focus
+        user_question = ""
+        for m in reversed(state["messages"]):
+            if m["role"] == "user":
+                user_question = m["content"]
+                break
+
+        # Build conversation history (excluding the last user turn — shown separately)
+        history_lines = []
+        pending_user = True  # skip the last user message from history
+        for m in reversed(state["messages"]):
+            if pending_user and m["role"] == "user":
+                pending_user = False
+                continue
+            history_lines.insert(0, f"{m['role'].upper()}: {m['content']}")
+        history_str = "\n".join(history_lines) if history_lines else "(new conversation)"
+
+        # Build context section
+        context_parts = []
+        if WEEK1_PERSONA_ENABLED:
+            persona = state["context"].get("person_profile", {})
+            if persona:
+                context_parts.append(
+                    f"User: {persona.get('name', 'Unknown')} | "
+                    f"Role: {persona.get('role', 'Guest')} | "
+                    f"Pref: {persona.get('pref', 'None')}"
+                )
+        if WEEK1_CALENDAR_ENABLED and tool_results.get("calendar"):
+            context_parts.append(f"\n[CALENDAR INFORMATION]\n{tool_results['calendar']}")
+
+        context_block = "\n".join(context_parts) if context_parts else ""
+
+        return f"""You are Jarvis, a helpful humanoid robot assistant. Answer questions accurately and concisely.
+
+FACTS ABOUT YOU (always use these, never contradict them):
+- Your name is {self.robot_name}
+- You were built by {self.robot_company}
+- You are deployed at: {self.robot_location}
+- Your role: {self.robot_role}
+
+RULES:
+- Answer the CURRENT QUESTION directly. Do not repeat greetings.
+- Give a specific, factual answer in 1-3 sentences.
+- Do not start with "Hello", "Hi", "Certainly", "Of course", or filler phrases.
+- Do not make up facts, distances, place names, or technical specifications.
+- If uncertain, say 'I'm not sure about that' or 'I don't have that information'.
+- Speak naturally, as if talking to a person face-to-face.
+
+{context_block}
+CONVERSATION HISTORY:
 {history_str}
 
-[INSTRUCTIONS]
-You are Jarvis, a friendly, efficient humanoid robot assistant.
-1. Always reply in the SAME LANGUAGE the user spoke. If they spoke Hindi, reply in Hindi. If English, reply in English.
-2. Answer the user's actual question directly. Do not add unrelated personal schedule, visitor, or calendar information.
-3. Greet the user by name only if they were recognized and the user is greeting you.
-4. If calendar information is provided above and user asks about schedule, use it directly.
-5. If the user asks to move, go, navigate, escort, or take them somewhere, include exactly one navigation action tag: [ACTION: NAVIGATE {{"destination": "PLACE_NAME"}}].
-6. Include a gesture tag only when it is natural: [ACTION: GESTURE {{"type": "GESTURE_ID"}}].
-7. Available Gestures: GREET_WAVE, POINT_ROOM, NOD_HEAD, SHRUG.
-8. Keep spoken answers concise, natural, and useful. Do not mention internal tags or tools aloud.
+CURRENT QUESTION: {user_question}
 
-[RESPONSE]
-"""
+ANSWER:"""
+
+
 
     async def _stream_response(
         self,
@@ -235,100 +275,101 @@ You are Jarvis, a friendly, efficient humanoid robot assistant.
 
     def _is_simple_query(self, text: str) -> bool:
         """
-        OPTIMIZATION: Detect simple queries that bypass the LLM entirely.
-        Handles both English and Hindi common phrases.
+        Detect simple factual queries that bypass the LLM entirely.
         """
         lowered = text.lower().strip()
 
-        # Time queries — English
-        time_patterns = ["what time", "what's the time", "tell me the time", "current time"]
-        if any(p in lowered for p in time_patterns):
+        fast_patterns = [
+            # Time
+            "what time", "what's the time", "tell me the time", "current time",
+            # Date
+            "what date", "what's the date", "today's date", "what day is it",
+            "what day", "what is today", "what's today",
+            # Location / where
+            "where are you", "where are we", "where we are", "where am i",
+            "which office", "what office", "where is this", "where do you work",
+            "your location", "our location", "what is this place", "what place is this",
+            # Company / organization
+            "which company", "what company", "who made you", "who built you",
+            "who created you", "which organization", "what organization",
+            "who do you work for", "who are you built by",
+            # Identity
+            "who are you", "what are you", "what's your name", "what is your name",
+            "your name", "who is jarvis", "tell me about yourself",
+            # Help
+            "what can you do", "help me", "help", "what do you do", "your capabilities",
+            # Stop
+            "stop", "never mind", "nevermind", "cancel", "dismiss",
+            "quit", "exit", "bye", "goodbye", "see you",
+        ]
+        if any(p in lowered for p in fast_patterns):
             return True
 
-        # Time queries — Hindi
-        hindi_time = ["kya time", "kya samay", "kitne baje", "time kya", "samay kya"]
-        if any(p in lowered for p in hindi_time):
-            return True
-
-        # Greetings — English (exact match)
-        en_greetings = {"hello", "hi there", "hey", "good morning", "good afternoon", "good evening"}
-        if lowered in en_greetings:
-            return True
-
-        # Greetings — Hindi
-        hi_greetings = {"namaste", "namaskar", "helo", "hi", "hello"}
-        if lowered in hi_greetings:
-            return True
-
-        # Acknowledgements — English
-        en_acks = {"thanks", "thank you", "ok", "okay", "yes", "no", "nope", "got it", "alright"}
-        if lowered in en_acks:
-            return True
-
-        # Acknowledgements — Hindi
-        hi_acks = {"shukriya", "dhanyavaad", "dhanyawad", "theek hai", "theek", "haan", "nahi", "nah",
-                   "acha", "accha", "thik hai", "bilkul", "zaroor"}
-        if lowered in hi_acks:
+        # Greetings / acks (exact match)
+        exact_matches = {
+            "hello", "hi there", "hey", "good morning", "good afternoon", "good evening",
+            "thanks", "thank you", "ok", "okay", "yes", "no", "nope", "got it", "alright",
+        }
+        if lowered in exact_matches:
             return True
 
         return False
     
     def _handle_simple_query(self, text: str, state: AgentState) -> str:
-        """
-        OPTIMIZATION: Handle simple queries without LLM — English and Hindi.
-        """
+        """Handle simple factual queries without LLM."""
         lowered = text.lower().strip()
-        import datetime
-        lang = state["context"].get("language", "English")
-        is_hindi = "hindi" in lang.lower() or any(
-            w in lowered for w in ["namaste", "namaskar", "shukriya", "dhanyavaad",
-                                    "theek hai", "haan", "nahi", "acha", "kya time",
-                                    "kitne baje", "samay"]
-        )
+        now = datetime.datetime.now()
 
-        # Time queries
-        time_patterns_en = ["what time", "what's the time", "tell me the time", "current time"]
-        time_patterns_hi = ["kya time", "kya samay", "kitne baje", "time kya", "samay kya"]
-        if any(p in lowered for p in time_patterns_en + time_patterns_hi):
-            now = datetime.datetime.now()
-            if is_hindi:
-                return f"Abhi {now.strftime('%I:%M %p')} baje hain."
-            return f"It is currently {now.strftime('%I:%M %p')}."
+        # Time
+        if any(p in lowered for p in ["what time", "what's the time", "tell me the time", "current time"]):
+            return f"It is {now.strftime('%I:%M %p')}."
 
-        # English greetings
-        name = state["context"].get("person_profile", {}).get("name")
+        # Date
+        if any(p in lowered for p in ["what date", "what's the date", "today's date", "what day is it", "what day", "what is today", "what's today"]):
+            return f"Today is {now.strftime('%A, %d %B %Y')}."
+
+        # Location
+        if any(p in lowered for p in ["where are you", "where are we", "where we are", "where am i", "which office", "what office", "where is this", "where do you work", "your location", "our location", "what is this place", "what place is this"]):
+            return f"We are at {self.robot_location}."
+
+        # Company / creator
+        if any(p in lowered for p in ["which company", "what company", "who made you", "who built you", "who created you", "which organization", "what organization", "who do you work for", "who are you built by"]):
+            return f"I was built by {self.robot_company}."
+
+        # Identity
+        if any(p in lowered for p in ["who are you", "what are you", "what's your name", "what is your name", "your name", "who is jarvis", "tell me about yourself"]):
+            return f"I'm {self.robot_name}, a {self.robot_role} built by {self.robot_company}."
+
+        # Help / capabilities
+        if any(p in lowered for p in ["what can you do", "help me", "help", "what do you do", "your capabilities"]):
+            return f"I can answer your questions, tell you the time and date, tell you about this office, and have a conversation with you."
+
+        # Stop / dismiss — set exit_intent so the main loop can break
+        if any(p in lowered for p in ["stop", "never mind", "nevermind", "cancel", "dismiss", "quit", "exit", "bye", "goodbye", "see you"]):
+            state["exit_intent"] = True
+            return "Alright, goodbye! I'll be here if you need anything."
+
+        # Greetings
         if lowered in {"hello", "hi there", "hey"}:
-            return f"Hello {name}! How can I help?" if name else "Hello! How can I help you today?"
-        if lowered in {"good morning", "good afternoon", "good evening"}:
-            return "Good to see you! What can I do for you?"
+            return f"Hello! How can I help you?"
+        if "good morning" in lowered:
+            return "Good morning! What can I do for you?"
+        if "good afternoon" in lowered:
+            return "Good afternoon! How can I help?"
+        if "good evening" in lowered:
+            return "Good evening! What do you need?"
 
-        # Hindi greetings
-        if lowered in {"namaste", "namaskar"}:
-            if name:
-                return f"Namaste {name}! Main aapki kya madad kar sakta hoon?"
-            return "Namaste! Main aapki kya madad kar sakta hoon?"
-
-        # English acknowledgements
+        # Acknowledgements
         if lowered in {"thanks", "thank you"}:
             return "You're welcome!"
         if lowered in {"ok", "okay", "got it", "alright"}:
             return "Got it."
         if lowered == "yes":
-            return "Great!"
+            return "Sure!"
         if lowered in {"no", "nope"}:
-            return "No problem."
+            return "Understood."
 
-        # Hindi acknowledgements
-        if lowered in {"shukriya", "dhanyavaad", "dhanyawad"}:
-            return "Koi baat nahi!"
-        if lowered in {"theek hai", "theek", "thik hai", "acha", "accha"}:
-            return "Theek hai!"
-        if lowered in {"haan", "bilkul", "zaroor"}:
-            return "Bahut accha!"
-        if lowered in {"nahi", "nah"}:
-            return "Koi baat nahi."
-
-        return "I'm ready to help."
+        return "Got it."
 
     def update_context(self, session_id: str, new_context: Dict[str, Any]):
         state = self.get_or_create_session(session_id)

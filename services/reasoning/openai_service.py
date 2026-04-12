@@ -43,7 +43,7 @@ class EnterpriseChatGPT(ILLMProvider):
         self.system_prompt = (
             "You are Jarvis, the Nueroid Office Humanoid assistant. "
             "You have access to company knowledge. Answer accurately and concisely. "
-            "Always reply in the SAME LANGUAGE the user spoke (English or Hindi). "
+            "Always reply in English. "
             "Keep responses to 1–3 sentences unless detail is explicitly requested. "
             "Never disclose internal server IPs, employee passwords, or confidential HR data."
         )
