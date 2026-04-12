@@ -84,8 +84,8 @@ BYTES_PER_SEC = SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH  # 32000
 MULTICAST_PACKET_SIZE = 5120
 
 # PlayStream chunking — must be small enough for real-time delivery
-PLAYSTREAM_CHUNK_BYTES = 1600           # 800 samples = 50ms at 16 kHz
-PLAYSTREAM_CHUNK_MS = 50
+PLAYSTREAM_CHUNK_BYTES = 640           # 320 samples = 20ms at 16 kHz
+PLAYSTREAM_CHUNK_MS = 20
 PLAYSTREAM_CHUNK_SECS = PLAYSTREAM_CHUNK_MS / 1000.0
 
 # Silence detection for speaker (avoids sending silence to DDS endlessly)
@@ -93,8 +93,8 @@ SILENCE_RMS_THRESHOLD = 100            # below this RMS, audio is considered sil
 SILENCE_GATE_SECS = 0.3               # stop sending after this many seconds of silence
 
 # Pipe buffer size — smaller = less latency on pause, but too small causes drops
-# Default Linux pipe is 64KB (~2s at 32KB/s). We use 8KB (~250ms).
-SPK_PIPE_BUF_SIZE = 8192
+# Default Linux pipe is 64KB (~2s at 32KB/s). We use 32KB (~1s).
+SPK_PIPE_BUF_SIZE = 32768
 
 # PulseAudio
 PA_SOURCE_NAME = "g1_microphone"

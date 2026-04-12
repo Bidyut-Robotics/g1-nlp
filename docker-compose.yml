@@ -103,4 +103,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  # Any persistent data volumes
   ollama_data:
