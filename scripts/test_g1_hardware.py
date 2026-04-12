@@ -30,8 +30,8 @@ CHANNELS = 1
 SAMPLE_WIDTH = 2  # 16-bit
 
 
-def test_speaker():
-    """Plays a 440Hz sine wave tone through G1 speaker for 2 seconds."""
+def test_speaker(wav_path=None):
+    """Plays audio through G1 speaker. Defaults to a 440Hz tone if no WAV provided."""
     from unitree_sdk2py.core.channel import ChannelFactoryInitialize
     from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
 
@@ -42,28 +42,41 @@ def test_speaker():
     client = AudioClient()
     client.Init()
     
-    print("📢 Playing tone (440Hz) through G1 head speaker...")
-    
-    duration = 2.0  # seconds
-    freq = 440.0
-    amplitude = 10000
-    chunk_ms = 50
-    samples_per_chunk = int(SAMPLE_RATE * chunk_ms / 1000)
-    
     stream_id = str(int(time.time()))
-    start_time = time.time()
     
     try:
-        while time.time() - start_time < duration:
-            chunk = array.array('h')
-            for i in range(samples_per_chunk):
-                t = (i + (time.time() - start_time) * SAMPLE_RATE) / SAMPLE_RATE
-                sample = int(amplitude * math.sin(2 * math.pi * freq * t))
-                chunk.append(sample)
+        if wav_path and os.path.exists(wav_path):
+            print(f"📢 Playing WAV file: {wav_path}")
+            with wave.open(wav_path, 'rb') as wf:
+                if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() != 16000:
+                    print(f"⚠️ Warning: WAV format mismatch. Expected 16kHz Mono 16-bit.")
+                    print(f"   Got: {wf.getframerate()}Hz {wf.getnchannels()}ch {wf.getsampwidth()*8}bit")
+                
+                chunk_size = 640 # 20ms at 16kHz
+                data = wf.readframes(chunk_size // 2)
+                while data:
+                    client.PlayStream("diag_tool", stream_id, data)
+                    # Pace it: 20ms of audio takes 20ms to play
+                    time.sleep(0.018) # Slight lead for networking
+                    data = wf.readframes(chunk_size // 2)
+        else:
+            print("📢 Playing tone (440Hz) through G1 head speaker...")
+            duration = 2.0  # seconds
+            freq = 440.0
+            amplitude = 10000
+            chunk_ms = 20
+            samples_per_chunk = int(SAMPLE_RATE * chunk_ms / 1000)
+            start_time = time.time()
             
-            # Send to G1
-            client.PlayStream("diag_tool", stream_id, chunk.tobytes())
-            time.sleep(chunk_ms / 1000.0 * 0.9)
+            while time.time() - start_time < duration:
+                chunk = array.array('h')
+                for i in range(samples_per_chunk):
+                    t = (i + (time.time() - start_time) * SAMPLE_RATE) / SAMPLE_RATE
+                    sample = int(amplitude * math.sin(2 * math.pi * freq * t))
+                    chunk.append(sample)
+                
+                client.PlayStream("diag_tool", stream_id, chunk.tobytes())
+                time.sleep(chunk_ms / 1000.0 * 0.9)
             
         print("✅ Speaker test complete")
     except KeyboardInterrupt:
@@ -179,11 +192,12 @@ def test_microphone():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="G1 Hardware Test")
     parser.add_argument("--speaker", action="store_true", help="Test G1 Speaker")
+    parser.add_argument("--wav", type=str, help="Path to WAV file to play (16kHz 16-bit Mono)")
     parser.add_argument("--mic", action="store_true", help="Test G1 Microphone")
     args = parser.parse_args()
 
     if args.speaker:
-        test_speaker()
+        test_speaker(args.wav)
     elif args.mic:
         test_microphone()
     else:
