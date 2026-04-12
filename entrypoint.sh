@@ -82,11 +82,35 @@ else
     echo "[HARDWARE] Mode: CPU fallback (device=cpu, compute=int8)"
 fi
 
-# ── Hardware mode summary ──────────────────────────────────────────────────────
-echo "[CONFIG] HARDWARE_MODE=${HARDWARE_MODE:-laptop}"
-echo "[CONFIG] LLM_MODE=${LLM_MODE:-local}"
-echo "[CONFIG] ASR_DEVICE=${ASR_DEVICE}"
-echo "[CONFIG] ASR_COMPUTE_TYPE=${ASR_COMPUTE_TYPE}"
-echo "=================================================="
+# ── G1 Mode: Start audio driver ───────────────────────────────────────────────
+if [ "${HARDWARE_MODE:-laptop}" = "g1" ]; then
+    echo "[G1] Starting G1 audio driver..."
+    # Ensure the driver log exists
+    touch /tmp/g1_audio_driver.log
+    
+    # Start the driver using the hardware manager script
+    python3 services/hardware/g1_hardware_manager.py start --verbose
+    
+    # Give it a few seconds to initialize DDS and PulseAudio modules
+    echo "[G1] Waiting for PulseAudio virtual devices..."
+    MAX_RETRIES=10
+    RETRY_COUNT=0
+    while ! pactl list sources short | grep -q "g1_microphone"; do
+        if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+            echo "[WARNING] G1 virtual microphone NOT found after 10s. Audio may fail."
+            echo "[DEBUG] Driver log tail:"
+            tail -n 20 /tmp/g1_audio_driver.log || true
+            break
+        fi
+        sleep 1
+        RETRY_COUNT=$((RETRY_COUNT + 1))
+    done
 
+    if pactl list sources short | grep -q "g1_microphone"; then
+        echo "[OK] G1 virtual devices detected in PulseAudio."
+    fi
+fi
+
+echo "--------------------------------------------------"
 exec "$@"
+
