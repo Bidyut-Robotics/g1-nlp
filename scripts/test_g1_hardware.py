@@ -41,24 +41,46 @@ def test_speaker(wav_path=None):
 
     client = AudioClient()
     client.Init()
-    
-    stream_id = str(int(time.time()))
-    
+    stream_id = "diag_tool"
     try:
         if wav_path and os.path.exists(wav_path):
-            print(f"📢 Playing WAV file: {wav_path}")
             with wave.open(wav_path, 'rb') as wf:
-                if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() != 16000:
-                    print(f"⚠️ Warning: WAV format mismatch. Expected 16kHz Mono 16-bit.")
-                    print(f"   Got: {wf.getframerate()}Hz {wf.getnchannels()}ch {wf.getsampwidth()*8}bit")
+                import numpy as np
+                fs_in = wf.getframerate()
+                ch_in = wf.getnchannels()
+                sw_in = wf.getsampwidth()
                 
-                chunk_size = 640 # 20ms at 16kHz
-                data = wf.readframes(chunk_size // 2)
-                while data:
-                    client.PlayStream("diag_tool", stream_id, data)
-                    # Pace it: 20ms of audio takes 20ms to play
-                    time.sleep(0.018) # Slight lead for networking
-                    data = wf.readframes(chunk_size // 2)
+                print(f"📢 Playing WAV: {fs_in}Hz, {ch_in}ch, {sw_in*8}bit")
+                
+                # We need to send 16000Hz, 1ch, 16-bit to the robot
+                target_fs = 16000
+                chunk_ms = 20
+                chunk_samples_in = int(fs_in * chunk_ms / 1000)
+                
+                while True:
+                    frames = wf.readframes(chunk_samples_in)
+                    if not frames:
+                        break
+                    
+                    # Convert raw bytes to numpy array
+                    samples = np.frombuffer(frames, dtype=np.int16)
+                    
+                    # Handle stereo -> mono
+                    if ch_in > 1:
+                        samples = samples.reshape(-1, ch_in).mean(axis=1).astype(np.int16)
+                    
+                    # Resample to 16000Hz if needed
+                    if fs_in != target_fs:
+                        num_samples_out = int(len(samples) * target_fs / fs_in)
+                        samples = np.interp(
+                            np.linspace(0, len(samples), num_samples_out, endpoint=False),
+                            np.arange(len(samples)),
+                            samples
+                        ).astype(np.int16)
+                    
+                    # Send to G1
+                    client.PlayStream("diag_tool", stream_id, samples.tobytes())
+                    time.sleep(chunk_ms / 1000.0 * 0.95)
         else:
             print("📢 Playing tone (440Hz) through G1 head speaker...")
             duration = 2.0  # seconds
