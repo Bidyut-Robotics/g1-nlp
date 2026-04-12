@@ -45,5 +45,6 @@ fastapi>=0.100.0
 uvicorn
 
 # ── Robot Hardware (optional — only needed for G1 mode) ───────────────────
-# Install manually if needed, or included here for Docker build:
-unitree_sdk2py
+# Install manually: pip install unitree_sdk2py
+# or follow: https://github.com/unitreerobotics/unitree_sdk2_python
+# unitree_sdk2py
