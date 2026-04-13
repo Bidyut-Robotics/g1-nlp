@@ -54,7 +54,7 @@ def test_speaker(wav_path=None):
                 
                 # We need to send 16000Hz, 1ch, 16-bit to the robot
                 target_fs = 16000
-                chunk_ms = 20
+                chunk_ms = 200
                 chunk_samples_in = int(fs_in * chunk_ms / 1000)
                 
                 while True:
@@ -86,7 +86,7 @@ def test_speaker(wav_path=None):
             duration = 2.0  # seconds
             freq = 440.0
             amplitude = 10000
-            chunk_ms = 20
+            chunk_ms = 200
             samples_per_chunk = int(SAMPLE_RATE * chunk_ms / 1000)
             start_time = time.time()
             

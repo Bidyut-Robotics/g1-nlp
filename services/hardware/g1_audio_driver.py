@@ -84,8 +84,8 @@ BYTES_PER_SEC = SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH  # 32000
 MULTICAST_PACKET_SIZE = 5120
 
 # PlayStream chunking — must be small enough for real-time delivery
-PLAYSTREAM_CHUNK_BYTES = 640           # 320 samples = 20ms at 16 kHz
-PLAYSTREAM_CHUNK_MS = 20
+PLAYSTREAM_CHUNK_BYTES = 6400           # 3200 samples = 200ms at 16 kHz
+PLAYSTREAM_CHUNK_MS = 200
 PLAYSTREAM_CHUNK_SECS = PLAYSTREAM_CHUNK_MS / 1000.0
 
 # Silence detection for speaker (avoids sending silence to DDS endlessly)
