@@ -48,9 +48,8 @@ services:
       # ASR: use GPU inside container
       ASR_DEVICE: ${ASR_DEVICE:-cuda}
       ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-float16}
-      # PulseAudio server address
-      PULSE_SERVER: unix:/run/user/1000/pulse/native
-      PULSE_COOKIE: /root/.config/pulse/cookie
+      # PulseAudio server address (Switch to TCP for reliability)
+      PULSE_SERVER: 127.0.0.1
       XDG_RUNTIME_DIR: /run/user/1000
       PULSE_SOURCE: g1_microphone
       PULSE_SINK: g1_speaker
