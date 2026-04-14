@@ -51,6 +51,8 @@ services:
       ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-float16}
       # PulseAudio server address (host socket - standard Ubuntu location)
       PULSE_SERVER: unix:/run/user/1000/pulse/native
+      PULSE_COOKIE: /root/.config/pulse/cookie
+      XDG_RUNTIME_DIR: /run/user/1000
       PULSE_SOURCE: g1_microphone
       PULSE_SINK: g1_speaker
       NVIDIA_DISABLE_REQUIRE: "true"
