@@ -47,6 +47,8 @@ class G1BuiltinTTS(ITTSProvider):
         
         # Initialize DDS immediately on startup
         try:
+            # CIRCULAR IMPORT FIX: Import root before submodules
+            import unitree_sdk2py
             from unitree_sdk2py.core.channel import ChannelFactoryInitialize
             from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
             
