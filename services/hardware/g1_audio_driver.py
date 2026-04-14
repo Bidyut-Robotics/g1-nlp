@@ -153,6 +153,7 @@ class DDSAudio:
             self._audio = AudioClient()
             self._audio.SetTimeout(10.0)
             self._audio.Init()
+            self._audio.SetVolume(100)
 
             self._inited = True
             logger.info("DDS initialized successfully")

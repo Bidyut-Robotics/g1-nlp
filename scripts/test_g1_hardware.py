@@ -41,6 +41,7 @@ def test_speaker(wav_path=None):
 
     client = AudioClient()
     client.Init()
+    client.SetVolume(100)
     stream_id = "diag_tool"
     try:
         if wav_path and os.path.exists(wav_path):
