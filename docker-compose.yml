@@ -26,9 +26,8 @@ services:
     # play and record audio via the host's sound system (laptop speakers/mic)
     # or through the G1 PulseAudio virtual devices (g1_microphone / g1_speaker).
     volumes:
-      - /tmp/pulse:/tmp/pulse                # PulseAudio socket
-      - /run/user/1000/pulse:/run/user/1000/pulse  # systemd user socket (fallback)
-      - ~/.config/pulse/cookie:/root/.config/pulse/cookie:ro # Authentication cookie
+      - /run/user/1000/pulse/native:/run/user/1000/pulse/native # Direct socket link
+      - ~/.config/pulse/cookie:/root/.config/pulse/cookie:ro 
       - ./config:/app/config                 # live config reloading
       - ./models:/app/models                 # ONNX/Piper models
       - ./data:/app/data                     # ChromaDB persistent store
@@ -49,12 +48,14 @@ services:
       # ASR: use GPU inside container
       ASR_DEVICE: ${ASR_DEVICE:-cuda}
       ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-float16}
-      # PulseAudio server address (host socket - standard Ubuntu location)
+      # PulseAudio server address
       PULSE_SERVER: unix:/run/user/1000/pulse/native
       PULSE_COOKIE: /root/.config/pulse/cookie
       XDG_RUNTIME_DIR: /run/user/1000
       PULSE_SOURCE: g1_microphone
       PULSE_SINK: g1_speaker
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
       NVIDIA_DISABLE_REQUIRE: "true"
       NLP_DEBUG: ${NLP_DEBUG:-1}
 
