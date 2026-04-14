@@ -91,6 +91,7 @@ PLAYSTREAM_CHUNK_SECS = PLAYSTREAM_CHUNK_MS / 1000.0
 # Silence detection for speaker (avoids sending silence to DDS endlessly)
 SILENCE_RMS_THRESHOLD = 100            # below this RMS, audio is considered silence
 SILENCE_GATE_SECS = 0.3               # stop sending after this many seconds of silence
+SPK_SOFTWARE_GAIN = 5.0              # boost volume for quiet head speakers
 
 # Pipe buffer size — smaller = less latency on pause, but too small causes drops
 # Default Linux pipe is 64KB (~2s at 32KB/s). We use 32KB (~1s).
@@ -567,9 +568,13 @@ def speaker_thread(shutdown_event: threading.Event):
                     time.sleep(next_send - now)
                 next_send = max(time.monotonic(), next_send + PLAYSTREAM_CHUNK_SECS)
 
-                # Send to G1 speaker
+                # Send to G1 speaker with software gain boost
                 try:
-                    dds.play_stream(APP_NAME, stream_id, data)
+                    # Apply gain + clipping
+                    import numpy as np
+                    samples_np = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+                    boosted = np.clip(samples_np * SPK_SOFTWARE_GAIN, -32768, 32767).astype(np.int16)
+                    dds.play_stream(APP_NAME, stream_id, boosted.tobytes())
                     playing = True
                     play_errors = 0
                 except Exception as e:
