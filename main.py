@@ -108,6 +108,7 @@ class LiveAudioPipeline:
             else:
                 print(f"[WAKEWORD] Initialized with standard name: '{self.wakeword_name}'")
                 self.wakeword_model = Model(wakeword_models=[self.wakeword_name], inference_framework="onnx")
+            print(f"[WAKEWORD] Available keys in model: {list(self.wakeword_model.models.keys())}")
         except Exception as e:
             print(f"\n[NLP ERROR] Failed to load wake-word model: {e}")
             sys.exit(0)
