@@ -46,6 +46,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     && rm -rf /var/lib/apt/lists/*
 
+# ── CycloneDDS (Required for Unitree SDK) ─────────────────────────────────────
+WORKDIR /tmp
+RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x && \
+    cd cyclonedds && mkdir build install && cd build && \
+    cmake .. -DCMAKE_INSTALL_PREFIX=../install && \
+    cmake --build . --target install
+
+# ── Unitree SDK 2 Python ──────────────────────────────────────────────────────
+WORKDIR /tmp
+RUN git clone https://github.com/unitreerobotics/unitree_sdk2_python.git && \
+    cd unitree_sdk2_python && \
+    export CYCLONEDDS_HOME=/tmp/cyclonedds/install && \
+    python3 -m pip install .
+
 # Make python3.11 the default python
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
     && update-alternatives --install /usr/bin/python  python  /usr/bin/python3.11 1
