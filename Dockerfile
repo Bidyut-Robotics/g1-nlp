@@ -105,7 +105,8 @@ WORKDIR /app
 RUN mkdir -p /root/.config/pulse && \
     echo "default-server = unix:/run/user/1000/pulse/native" > /root/.config/pulse/client.conf && \
     echo "autospawn = no" >> /root/.config/pulse/client.conf && \
-    echo "daemon-binary = /bin/true" >> /root/.config/pulse/client.conf
+    echo "daemon-binary = /bin/true" >> /root/.config/pulse/client.conf && \
+    echo "cookie-file = /dev/null" >> /root/.config/pulse/client.conf
 
 # Copy application source
 COPY . .

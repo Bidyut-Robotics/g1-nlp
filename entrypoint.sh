@@ -20,6 +20,7 @@ if [ -n "${PULSE_SERVER:-}" ]; then
     echo "default-server = ${PULSE_SERVER}" > "$PULSE_DIR/client.conf"
     echo "autospawn = no" >> "$PULSE_DIR/client.conf"
     echo "daemon-binary = /bin/true" >> "$PULSE_DIR/client.conf"
+    echo "cookie-file = /dev/null" >> "$PULSE_DIR/client.conf"
     export PULSE_CLIENTCONFIG="$PULSE_DIR/client.conf"
 fi
 

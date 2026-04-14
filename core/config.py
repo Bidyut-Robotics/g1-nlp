@@ -84,7 +84,7 @@ def get_hardware_config() -> Dict[str, Any]:
             "mode": "g1",
             "mic_device": None, # Use system default (PULSE_SOURCE handled by Docker)
             "tts_player": base_player,
-            "tts_player_extra_args": ["-D", "g1_speaker"],
+            "tts_player_extra_args": ["-D", "pulse"],
         }
 
     # Default: laptop
