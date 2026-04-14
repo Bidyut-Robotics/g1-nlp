@@ -10,9 +10,10 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 # System packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Python 3.11
+    # Python 3.11 + Dev headers
     python3.11 \
     python3.11-dev \
+    python3-dev \
     python3.11-venv \
     python3-pip \
     # Build tools
