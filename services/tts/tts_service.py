@@ -32,3 +32,46 @@ class PiperTTS(ITTSProvider):
             
     def get_sample_rate(self) -> int:
         return self.voice.config.sample_rate
+
+
+class G1BuiltinTTS(ITTSProvider):
+    """
+    Standard G1 Robot TTS using the onboard TtsMaker service.
+    Bypasses PulseAudio/PCM streaming for maximum stability.
+    """
+    def __init__(self, interface: str = "eth0", speaker_id: int = 1):
+        self.interface = interface
+        self.speaker_id = speaker_id
+        self.is_builtin = True
+        self._inited = False
+        self._client = None
+
+    def _init_dds(self):
+        if self._inited:
+            return
+        from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+        from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
+        
+        print(f"[TTS:G1] Initializing built-in TTS on {self.interface}...")
+        ChannelFactoryInitialize(0, self.interface)
+        self._client = AudioClient()
+        self._client.Init()
+        self._client.SetVolume(100)
+        self._inited = True
+
+    async def speak(self, text: str) -> AsyncGenerator[bytes, None]:
+        """
+        Triggers the robot's built-in TTS. Yields nothing (no bytes for aplay).
+        """
+        self._init_dds()
+        if self._client:
+            print(f"[TTS:G1] Speaking (TtsMaker): {text}")
+            ret = self._client.TtsMaker(text, self.speaker_id)
+            if ret != 0:
+                 print(f"[TTS:G1 ERROR] TtsMaker returned code {ret}")
+        
+        # Generator must yield at least once to be valid in main loops
+        if False: yield b""
+
+    def get_sample_rate(self) -> int:
+        return 16000 # Default for G1 built-in

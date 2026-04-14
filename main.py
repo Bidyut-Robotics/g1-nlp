@@ -201,28 +201,41 @@ class LiveAudioPipeline:
             print(f"[TTS:FALLBACK] {text}")
             return
 
-        self._debug(f"TTS start: sample_rate={self.tts_sample_rate}, chars={len(text)}")
-        aplay_cmd = [
-            self.tts_player, "-q",
-            "-t", "raw",
-            "-f", "S16_LE",
-            "-r", str(self.tts_sample_rate),
-            "-c", "1",
-        ] + self.tts_player_extra_args
-        player = subprocess.Popen(aplay_cmd, stdin=subprocess.PIPE)
-
+        self._debug(f"TTS start: builtin={getattr(self.tts, 'is_builtin', False)}, chars={len(text)}")
+        
         self.is_speaking = True
         try:
-            async for audio_bytes in self.tts.speak(text):
-                if player.stdin:
-                    player.stdin.write(audio_bytes)
-            if player.stdin:
-                player.stdin.close()
-            player.wait(timeout=10)
+            # ── Built-in mode (Robot's own voice) ────────────────────────────
+            if getattr(self.tts, "is_builtin", False):
+                # Just iterate to trigger the API call, no bytes to play
+                async for _ in self.tts.speak(text):
+                    pass
+            
+            # ── Standard mode (Custom Jarvis voice via aplay) ────────────────
+            else:
+                aplay_cmd = [
+                    self.tts_player, "-q",
+                    "-t", "raw",
+                    "-f", "S16_LE",
+                    "-r", str(self.tts_sample_rate),
+                    "-c", "1",
+                ] + self.tts_player_extra_args
+                player = subprocess.Popen(aplay_cmd, stdin=subprocess.PIPE)
+                
+                try:
+                    async for audio_bytes in self.tts.speak(text):
+                        if player.stdin:
+                            player.stdin.write(audio_bytes)
+                    if player.stdin:
+                        player.stdin.close()
+                    player.wait(timeout=10)
+                except Exception as exc:
+                    player.kill()
+                    raise exc
+
             self._debug("TTS playback complete")
         except Exception as exc:
             print(f"[TTS:ERROR] {exc}")
-            player.kill()
         finally:
             self.is_speaking = False
 

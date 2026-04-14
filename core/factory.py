@@ -4,7 +4,7 @@ from .config import get_llm_config, get_tts_config, load_app_config
 from services.asr.asr_service import FasterWhisperASR
 from services.reasoning.llm_service import OllamaLLM, GroqLLM
 from services.reasoning.openai_service import EnterpriseChatGPT
-from services.tts.tts_service import PiperTTS
+from services.tts.tts_service import PiperTTS, G1BuiltinTTS
 
 
 class ServiceFactory:
@@ -76,11 +76,16 @@ class ServiceFactory:
     def get_tts_provider() -> ITTSProvider:
         tts_config = get_tts_config()
         mode = os.getenv("TTS_MODE", tts_config.get("mode", "local")).lower()
+
         if mode == "local":
             model_path = os.getenv(
                 "TTS_MODEL_PATH",
                 tts_config.get("model_path", "models/en_US-lessac-medium.onnx"),
             )
             return PiperTTS(model_path=model_path)
+        elif mode == "g1_builtin":
+            interface = os.getenv("G1_DDS_INTERFACE", "eth0")
+            speaker_id = int(os.getenv("G1_SPEAKER_ID", "1")) # 1=English
+            return G1BuiltinTTS(interface=interface, speaker_id=speaker_id)
         else:
             return PiperTTS()

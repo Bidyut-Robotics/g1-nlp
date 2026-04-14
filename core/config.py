@@ -79,15 +79,12 @@ def get_hardware_config() -> Dict[str, Any]:
 
     if mode == "g1":
         # In Docker/G1 mode, we use the system default audio device (None)
-        # and let the PULSE_SOURCE environment variable handle the routing.
-        speaker_extra_args = g1_cfg.get(
-            "speaker_player_args", ["-D", "alsa_output.g1_speaker"]
-        )
+        # and let the PULSE_SINK/PULSE_SOURCE environment variables handle the routing.
         return {
             "mode": "g1",
             "mic_device": None, # Use system default
             "tts_player": base_player,
-            "tts_player_extra_args": speaker_extra_args,
+            "tts_player_extra_args": [],
         }
 
     # Default: laptop
