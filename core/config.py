@@ -78,13 +78,12 @@ def get_hardware_config() -> Dict[str, Any]:
     base_player = tts_cfg.get("player", "aplay")
 
     if mode == "g1":
-        # In Docker/G1 mode, we route audio to the 'g1_speaker' virtual sink
-        # which is bridged to the robot's physical head speakers.
+        # Explicitly target the G1 virtual devices created by the host driver.
         return {
             "mode": "g1",
-            "mic_device": None, # Use system default (PULSE_SOURCE handled by Docker)
+            "mic_device": "g1_microphone",
             "tts_player": base_player,
-            "tts_player_extra_args": ["-D", "pulse"],
+            "tts_player_extra_args": ["-D", "g1_speaker"],
         }
 
     # Default: laptop
