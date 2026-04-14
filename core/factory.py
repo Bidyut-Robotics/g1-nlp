@@ -84,7 +84,12 @@ class ServiceFactory:
             )
             return PiperTTS(model_path=model_path)
         elif mode == "g1_builtin":
-            interface = os.getenv("G1_DDS_INTERFACE", "eth0")
+            # Priorities: Env Var > app_config.json > eth0
+            g1_cfg = load_app_config().get("g1", {})
+            interface = os.getenv(
+                "G1_DDS_INTERFACE", 
+                g1_cfg.get("dds_interface", "eth0")
+            )
             speaker_id = int(os.getenv("G1_SPEAKER_ID", "1")) # 1=English
             return G1BuiltinTTS(interface=interface, speaker_id=speaker_id)
         else:

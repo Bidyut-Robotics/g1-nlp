@@ -43,32 +43,35 @@ class G1BuiltinTTS(ITTSProvider):
         self.interface = interface
         self.speaker_id = speaker_id
         self.is_builtin = True
-        self._inited = False
         self._client = None
-
-    def _init_dds(self):
-        if self._inited:
-            return
-        from unitree_sdk2py.core.channel import ChannelFactoryInitialize
-        from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
         
-        print(f"[TTS:G1] Initializing built-in TTS on {self.interface}...")
-        ChannelFactoryInitialize(0, self.interface)
-        self._client = AudioClient()
-        self._client.Init()
-        self._client.SetVolume(100)
-        self._inited = True
+        # Initialize DDS immediately on startup
+        try:
+            from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+            from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
+            
+            print(f"[TTS:G1] Initializing built-in TTS on {self.interface}...")
+            ChannelFactoryInitialize(0, self.interface)
+            self._client = AudioClient()
+            self._client.Init()
+            # Note: TtsMaker doesn't always need a long sleep after Init(), 
+            # but we assume the factory handles the handshake.
+            self._client.SetVolume(100)
+            print("[TTS:G1] DDS initialised successfully.")
+        except Exception as e:
+            print(f"[TTS:G1 ERROR] Initialization failed: {e}")
 
     async def speak(self, text: str) -> AsyncGenerator[bytes, None]:
         """
-        Triggers the robot's built-in TTS. Yields nothing (no bytes for aplay).
+        Triggers the robot's built-in TTS via TtsMaker.
         """
-        self._init_dds()
         if self._client:
             print(f"[TTS:G1] Speaking (TtsMaker): {text}")
             ret = self._client.TtsMaker(text, self.speaker_id)
             if ret != 0:
-                 print(f"[TTS:G1 ERROR] TtsMaker returned code {ret}")
+                 print(f"[TTS:G1 ERROR] TtsMaker returned code {ret}. Interface: {self.interface}")
+        else:
+            print(f"[TTS:G1 ERROR] AudioClient not available for: {text}")
         
         # Generator must yield at least once to be valid in main loops
         if False: yield b""
