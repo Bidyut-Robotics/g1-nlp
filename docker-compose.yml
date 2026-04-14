@@ -59,6 +59,9 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: all
       NVIDIA_DISABLE_REQUIRE: "true"
       NLP_DEBUG: ${NLP_DEBUG:-1}
+      # Cache redirects for non-root user
+      HF_HOME: /tmp/huggingface
+      XDG_CACHE_HOME: /tmp/cache
 
     # Share host network namespace for DDS/multicast (required for G1 mode)
     network_mode: host
