@@ -79,8 +79,12 @@ def test_speaker(wav_path=None):
                             samples
                         ).astype(np.int16)
                     
-                    # Send to G1
-                    client.PlayStream("diag_tool", stream_id, samples.tobytes())
+                    # Send to G1 (with 5.0x volume boost)
+                    boost_factor = 5.0
+                    boosted_samples = (samples.astype(np.float32) * boost_factor)
+                    boosted_samples = np.clip(boosted_samples, -32768, 32767).astype(np.int16)
+                    
+                    client.PlayStream("diag_tool", stream_id, boosted_samples.tobytes())
                     time.sleep(chunk_ms / 1000.0 * 0.95)
         else:
             print("📢 Playing tone (440Hz) through G1 head speaker...")
@@ -106,6 +110,26 @@ def test_speaker(wav_path=None):
         print("⏹️ Interrupted")
     finally:
         client.PlayStop("diag_tool")
+
+
+def test_tts(text: str, speaker_id: int = 1):
+    """Uses the G1's built-in TtsMaker to speak text."""
+    from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+    from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
+
+    print(f"🔊 Initializing DDS on {DDS_INTERFACE}...")
+    ChannelFactoryInitialize(0, DDS_INTERFACE)
+    time.sleep(0.5)
+
+    client = AudioClient()
+    client.Init()
+    client.SetVolume(100)
+
+    print(f"📢 Using TtsMaker: '{text}' (Speaker ID: {speaker_id})")
+    ret = client.TtsMaker(text, speaker_id)
+    print(f"✅ TtsMaker returned: {ret}")
+    # Give it a moment to finish speaking
+    time.sleep(len(text) * 0.1 + 2.0)
 
 
 def get_local_ip(interface):
@@ -216,11 +240,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="G1 Hardware Test")
     parser.add_argument("--speaker", action="store_true", help="Test G1 Speaker")
     parser.add_argument("--wav", type=str, help="Path to WAV file to play (16kHz 16-bit Mono)")
+    parser.add_argument("--tts", type=str, help="Text to speak using built-in TtsMaker")
     parser.add_argument("--mic", action="store_true", help="Test G1 Microphone")
     args = parser.parse_args()
 
-    if args.speaker:
+    if args.speaker or args.wav:
         test_speaker(args.wav)
+    elif args.tts:
+        test_tts(args.tts)
     elif args.mic:
         test_microphone()
     else:
