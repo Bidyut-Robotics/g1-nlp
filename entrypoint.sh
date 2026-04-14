@@ -12,6 +12,15 @@ echo "=================================================="
 echo " Humanoid NLP — Container Startup"
 echo "=================================================="
 
+# ── Dynamic PulseAudio Config ───────────────────────────────────────────────
+# Ensure the client respects the environment-provided PULSE_SERVER
+mkdir -p /root/.config/pulse
+if [ -n "${PULSE_SERVER:-}" ]; then
+    echo "default-server = ${PULSE_SERVER}" > /root/.config/pulse/client.conf
+    echo "autospawn = no" >> /root/.config/pulse/client.conf
+    echo "daemon-binary = /bin/true" >> /root/.config/pulse/client.conf
+fi
+
 # ── Hardware Diagnostics ──────────────────────────────────────────────────────
 echo "[DIAGNOSTIC] Checking environment..."
 
