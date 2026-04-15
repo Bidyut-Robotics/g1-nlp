@@ -135,16 +135,9 @@ class G1MulticastStream:
             try:
                 data, _ = sock.recvfrom(8192)
                 if len(data) > 0:
-                    # G1 sends 8 channels of int16 audio
+                    # G1 sends mono 16kHz int16 PCM (5120 bytes = 2560 samples = 160ms)
                     raw_samples = np.frombuffer(data, dtype=np.int16)
-                    
-                    if len(raw_samples) % 8 == 0:
-                        # Reshape to (N, 8) and take first channel
-                        chunk = raw_samples.reshape(-1, 8)[:, 0].copy()
-                        self.queue.put(chunk)
-                    else:
-                        # Fallback if packet is weirdly sized
-                        self.queue.put(raw_samples.copy())
+                    self.queue.put(raw_samples.copy())
             except socket.timeout:
                 continue
             except Exception as e:
