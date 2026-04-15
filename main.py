@@ -65,13 +65,45 @@ class G1MulticastStream:
     Direct UDP Multicast listener for G1 Microphone.
     Bypasses PulseAudio entirely.
     """
-    def __init__(self, queue, interface="eth0"):
+    def __init__(self, queue, interface="eth0", local_ip="192.168.123.164"):
         self.queue = queue
         self.interface = interface
+        self.local_ip = local_ip
         self.running = False
         self.thread = None
         self.multicast_group = "239.168.123.161"
         self.port = 5555
+        self._voice_client = None
+
+    def _activate_mic(self):
+        """Send Voice Service API command to start mic streaming (mode=1)."""
+        import json
+        try:
+            from unitree_sdk2py.rpc.client import Client
+            API_SET_MODE = 1008
+            vc = Client("voice", False)
+            vc.SetTimeout(5.0)
+            vc._SetApiVerson("1.0.0.0")
+            vc._RegistApi(API_SET_MODE, 0)
+            code, _ = vc._Call(API_SET_MODE, json.dumps({"mode": 1}))
+            if code != 0:
+                print(f"[AUDIO:G1-DIRECT] Warning: Could not enable mic mode (code={code}). Check PC1 voice service.")
+            else:
+                print("[AUDIO:G1-DIRECT] Mic streaming activated (mode=1).")
+            self._voice_client = (vc, API_SET_MODE)
+        except Exception as e:
+            print(f"[AUDIO:G1-DIRECT] Warning: Failed to activate mic via voice API: {e}")
+
+    def _deactivate_mic(self):
+        """Reset mic to idle mode (mode=2)."""
+        import json
+        if self._voice_client:
+            try:
+                vc, API_SET_MODE = self._voice_client
+                vc._Call(API_SET_MODE, json.dumps({"mode": 2}))
+                print("[AUDIO:G1-DIRECT] Mic streaming deactivated (mode=2).")
+            except Exception as e:
+                print(f"[AUDIO:G1-DIRECT] Warning: Failed to deactivate mic: {e}")
 
     def _listen(self):
         import socket
@@ -79,22 +111,40 @@ class G1MulticastStream:
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        
+        # Bind to the port
         sock.bind(('', self.port))
 
-        # Join multicast group
-        mreq = struct.pack("4sl", socket.inet_aton(self.multicast_group), socket.INADDR_ANY)
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-        sock.settimeout(1.0)
+        # Join multicast group explicitly on the robot interface IP
+        # This prevents it from accidentally joining on WiFi
+        try:
+            mreq = struct.pack("4s4s", 
+                               socket.inet_aton(self.multicast_group), 
+                               socket.inet_aton(self.local_ip))
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        except Exception as e:
+            print(f"[AUDIO:G1-DIRECT] Warning: Failed to join multicast group on {self.local_ip}: {e}")
+            # Fallback to general join
+            mreq = struct.pack("4sl", socket.inet_aton(self.multicast_group), socket.INADDR_ANY)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
-        print(f"[AUDIO:G1-DIRECT] Listening on multicast {self.multicast_group}:{self.port}")
+        sock.settimeout(1.0)
+        print(f"[AUDIO:G1-DIRECT] Listening on {self.local_ip} -> {self.multicast_group}:{self.port}")
 
         while self.running:
             try:
-                data, _ = sock.recvfrom(2048)
+                data, _ = sock.recvfrom(8192)
                 if len(data) > 0:
-                    # Convert raw bytes (int16, 16kHz) to numpy
-                    chunk = np.frombuffer(data, dtype=np.int16)
-                    self.queue.put(chunk)
+                    # G1 sends 8 channels of int16 audio
+                    raw_samples = np.frombuffer(data, dtype=np.int16)
+                    
+                    if len(raw_samples) % 8 == 0:
+                        # Reshape to (N, 8) and take first channel
+                        chunk = raw_samples.reshape(-1, 8)[:, 0].copy()
+                        self.queue.put(chunk)
+                    else:
+                        # Fallback if packet is weirdly sized
+                        self.queue.put(raw_samples.copy())
             except socket.timeout:
                 continue
             except Exception as e:
@@ -103,6 +153,7 @@ class G1MulticastStream:
         sock.close()
 
     def start(self):
+        self._activate_mic()
         self.running = True
         import threading
         self.thread = threading.Thread(target=self._listen, daemon=True)
@@ -112,6 +163,7 @@ class G1MulticastStream:
         self.running = False
         if self.thread:
             self.thread.join()
+        self._deactivate_mic()
 
     def __enter__(self):
         self.start()
@@ -421,7 +473,10 @@ class LiveAudioPipeline:
             # ── Choose Capture Method ─────────────────────────────────────────────
             # If G1 mode, we use direct multicast to bypass PulseAudio
             if self.hardware_mode == "g1":
-                 capture_context = G1MulticastStream(self.audio_queue)
+                 g1_cfg = load_app_config().get("g1", {})
+                 local_ip = g1_cfg.get("local_ip", "192.168.123.164")
+                 interface = g1_cfg.get("dds_interface", "eth0")
+                 capture_context = G1MulticastStream(self.audio_queue, interface=interface, local_ip=local_ip)
             else:
                  capture_context = sd.InputStream(
                     samplerate=WAKEWORD_SAMPLE_RATE,
