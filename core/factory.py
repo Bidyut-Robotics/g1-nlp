@@ -4,7 +4,7 @@ from .config import get_llm_config, get_tts_config, load_app_config
 from services.asr.asr_service import FasterWhisperASR
 from services.reasoning.llm_service import OllamaLLM, GroqLLM
 from services.reasoning.openai_service import EnterpriseChatGPT
-from services.tts.tts_service import PiperTTS, G1BuiltinTTS
+from services.tts.tts_service import PiperTTS, G1BuiltinTTS, G1DirectTTS
 
 
 class ServiceFactory:
@@ -83,14 +83,23 @@ class ServiceFactory:
                 tts_config.get("model_path", "models/en_US-lessac-medium.onnx"),
             )
             return PiperTTS(model_path=model_path)
-        elif mode == "g1_builtin":
+        elif mode == "g1_direct":
             # Priorities: Env Var > app_config.json > eth0
             g1_cfg = load_app_config().get("g1", {})
             interface = os.getenv(
                 "G1_DDS_INTERFACE", 
                 g1_cfg.get("dds_interface", "eth0")
             )
-            speaker_id = int(os.getenv("G1_SPEAKER_ID", "1")) # 1=English
+            model_path = os.getenv(
+                "TTS_MODEL_PATH",
+                tts_config.get("model_path", "models/en_US-lessac-medium.onnx"),
+            )
+            return G1DirectTTS(model_path=model_path, interface=interface)
+        elif mode == "g1_builtin":
+            # Native Robot Voice
+            g1_cfg = load_app_config().get("g1", {})
+            interface = os.getenv("G1_DDS_INTERFACE", g1_cfg.get("dds_interface", "eth0"))
+            speaker_id = int(os.getenv("G1_SPEAKER_ID", "1"))
             return G1BuiltinTTS(interface=interface, speaker_id=speaker_id)
         else:
             return PiperTTS()

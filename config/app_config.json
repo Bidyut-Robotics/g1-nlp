@@ -36,7 +36,7 @@
     }
   },
   "tts": {
-    "mode": "local",
+    "mode": "g1_direct",
     "model_path": "models/en_US-lessac-medium.onnx",
     "hindi_model_path": "models/hi_IN-priyamvada-medium.onnx",
     "player": "aplay"
