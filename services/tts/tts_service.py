@@ -112,9 +112,18 @@ class G1DirectTTS(ITTSProvider):
         except Exception as e:
             print(f"[TTS:G1-DIRECT ERROR] Initialization failed: {e}")
 
+    def _play_stream(self, stream_id: str, data: bytes):
+        """Send PCM bytes to the robot speaker, with list fallback for older SDKs."""
+        try:
+            self._client.PlayStream("jarvis_brain", stream_id, data)
+        except TypeError:
+            # Some SDK versions require a list instead of bytes
+            self._client.PlayStream("jarvis_brain", stream_id, list(data))
+
     async def speak(self, text: str) -> AsyncGenerator[bytes, None]:
         import asyncio
         import numpy as np
+        import time as _time
 
         if not self._client:
             print(f"[TTS:G1-DIRECT ERROR] AudioClient not available for: {text}")
@@ -122,7 +131,10 @@ class G1DirectTTS(ITTSProvider):
                 yield chunk
             return
 
-        print(f"[TTS:G1-DIRECT] Streaming to robot: '{text}'")
+        # Use a unique stream_id per speak() call so a fresh stream is opened
+        # each time (avoids robot rejecting a reused ID after PlayStop)
+        stream_id = f"jarvis_{int(_time.time() * 1000)}"
+        print(f"[TTS:G1-DIRECT] Streaming to robot: '{text}' (stream={stream_id})")
 
         target_fs = 16000
         source_fs = self.piper.get_sample_rate()
@@ -146,14 +158,13 @@ class G1DirectTTS(ITTSProvider):
                     samples.astype(np.float32) * boost_factor, -32768, 32767
                 ).astype(np.int16)
 
-                # Send chunk to robot speaker
+                # Send chunk to robot speaker (with bytes→list fallback)
                 try:
-                    self._client.PlayStream("jarvis_brain", self.stream_id, boosted.tobytes())
+                    self._play_stream(stream_id, boosted.tobytes())
                 except Exception as e:
                     print(f"[TTS:G1-DIRECT ERROR] PlayStream failed: {e}")
 
-                # Pace delivery: wait ~95% of this chunk's duration so the robot
-                # buffer doesn't get flooded (mirrors test_g1_hardware.py behaviour)
+                # Pace delivery so the robot buffer doesn't get flooded
                 chunk_duration = len(samples) / target_fs
                 await asyncio.sleep(chunk_duration * 0.95)
 
