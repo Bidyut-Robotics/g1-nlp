@@ -180,7 +180,12 @@ class LiveAudioPipeline:
     """
 
     def __init__(self):
-        self.debug_enabled = os.getenv("NLP_DEBUG", "1").lower() not in {"0", "false", "no"}
+        app_cfg_early = load_app_config()
+        _env_debug = os.getenv("NLP_DEBUG")
+        if _env_debug is not None:
+            self.debug_enabled = _env_debug.lower() not in {"0", "false", "no"}
+        else:
+            self.debug_enabled = bool(app_cfg_early.get("nlp_debug", True))
         self.session_id = f"session_{int(time.time())}"
 
         # Thread-safe audio queue filled by the sounddevice callback
