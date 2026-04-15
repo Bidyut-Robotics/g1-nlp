@@ -60,6 +60,67 @@ DEBUG_LOG_INTERVAL_SECONDS = 1.0
 WAKEWORD_DEBUG_FLOOR = 0.20
 
 
+class G1MulticastStream:
+    """
+    Direct UDP Multicast listener for G1 Microphone.
+    Bypasses PulseAudio entirely.
+    """
+    def __init__(self, queue, interface="eth0"):
+        self.queue = queue
+        self.interface = interface
+        self.running = False
+        self.thread = None
+        self.multicast_group = "239.168.123.161"
+        self.port = 5555
+
+    def _listen(self):
+        import socket
+        import struct
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('', self.port))
+
+        # Join multicast group
+        mreq = struct.pack("4sl", socket.inet_aton(self.multicast_group), socket.INADDR_ANY)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        sock.settimeout(1.0)
+
+        print(f"[AUDIO:G1-DIRECT] Listening on multicast {self.multicast_group}:{self.port}")
+
+        while self.running:
+            try:
+                data, _ = sock.recvfrom(2048)
+                if len(data) > 0:
+                    # Convert raw bytes (int16, 16kHz) to numpy
+                    chunk = np.frombuffer(data, dtype=np.int16)
+                    self.queue.put(chunk)
+            except socket.timeout:
+                continue
+            except Exception as e:
+                print(f"[AUDIO:G1-DIRECT ERROR] {e}")
+                break
+        sock.close()
+
+    def start(self):
+        self.running = True
+        import threading
+        self.thread = threading.Thread(target=self._listen, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.running = False
+        if self.thread:
+            self.thread.join()
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
+
+
 class LiveAudioPipeline:
     """
     End-to-end microphone loop.
@@ -357,15 +418,21 @@ class LiveAudioPipeline:
                 except (ValueError, TypeError):
                     parsed_device = self.device
 
-            with sd.InputStream(
-                samplerate=WAKEWORD_SAMPLE_RATE,
-                blocksize=WAKEWORD_BLOCK_SIZE,
-                device=parsed_device,
-                channels=1,
-                dtype="int16",
-                callback=self._audio_callback,
-            ):
+            # ── Choose Capture Method ─────────────────────────────────────────────
+            # If G1 mode, we use direct multicast to bypass PulseAudio
+            if self.hardware_mode == "g1":
+                 capture_context = G1MulticastStream(self.audio_queue)
+            else:
+                 capture_context = sd.InputStream(
+                    samplerate=WAKEWORD_SAMPLE_RATE,
+                    blocksize=WAKEWORD_BLOCK_SIZE,
+                    device=parsed_device,
+                    channels=1,
+                    dtype="int16",
+                    callback=self._audio_callback,
+                )
 
+            with capture_context:
                 # ── State machine outer loop ──────────────────────────────────
                 while True:
 

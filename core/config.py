@@ -78,11 +78,13 @@ def get_hardware_config() -> Dict[str, Any]:
     base_player = tts_cfg.get("player", "aplay")
 
     if mode == "g1":
-        # In host-local mode, we use the system default devices.
-        # Ensure you run 'pactl set-default-source g1_microphone' first.
+        # In G1 mode, Jarvis now uses direct hardware-native audio.
+        # - Mic: UDP Multicast (Direct from Head)
+        # - Speaker: DDS PlayStream (Direct to Head)
+        # PulseAudio/pactl defaults are no longer required.
         return {
             "mode": "g1",
-            "mic_device": None, # Use system default
+            "mic_device": None,
             "tts_player": base_player,
             "tts_player_extra_args": [],
         }
