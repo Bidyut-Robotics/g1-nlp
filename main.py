@@ -57,7 +57,12 @@ MIN_SPEECH_CHUNKS = 2               # Minimum speech chunks to bother transcribi
 
 # Silero VAD thresholds
 VAD_SPEECH_THRESHOLD = 0.5          # Probability threshold for "is speech"
-VAD_BARGE_IN_CONFIRM_CHUNKS = 2     # Consecutive VAD-positive chunks to confirm barge-in (~160ms)
+VAD_BARGE_IN_CONFIRM_CHUNKS = 5     # Consecutive VAD-positive chunks to confirm barge-in (~400ms)
+# Energy gate applied BEFORE Silero VAD to reject laptop speaker echo.
+# Mic energy must exceed TTS output energy × this ratio; raise if false triggers persist.
+BARGE_IN_ECHO_REJECT_RATIO = 1.8
+# Absolute minimum mic energy — barge-in won't fire in a silent room.
+BARGE_IN_MIN_MIC_ENERGY = 0.020
 
 # ── Pre-roll ──────────────────────────────────────────────────────────────────
 PRE_ROLL_SECONDS = 1.5
@@ -469,8 +474,7 @@ class LiveAudioPipeline:
             try:
                 await self._play_tts(sentence)
             except asyncio.CancelledError:
-                self.tts_sentence_queue.task_done()
-                raise
+                raise  # finally runs next and calls task_done() exactly once
             finally:
                 self.tts_sentence_queue.task_done()
 
@@ -501,13 +505,27 @@ class LiveAudioPipeline:
             # Buffer chunk so the user's question survives the interrupt
             self._barge_in_preroll.append(chunk)
 
+            # ── Energy gate — rejects laptop speaker echo before calling Silero ──
+            # On laptop the mic is ~10cm from the speaker, so TTS audio bleeds into
+            # the mic and Silero correctly classifies it as speech.  We only proceed
+            # with VAD if the mic is noticeably louder than the TTS output itself.
+            mic_energy = self._energy(chunk)
+            echo_threshold = max(
+                self._tts_output_energy * BARGE_IN_ECHO_REJECT_RATIO,
+                BARGE_IN_MIN_MIC_ENERGY,
+            )
+            if mic_energy < echo_threshold:
+                speech_count = 0  # reset — likely just echo, not a human voice
+                continue
+
             # Run Silero VAD in thread (CPU-bound)
             is_speech = await asyncio.to_thread(self._vad_is_speech, chunk)
 
             if is_speech:
                 speech_count += 1
                 self._debug(
-                    f"[BARGE-IN] VAD speech {speech_count}/{VAD_BARGE_IN_CONFIRM_CHUNKS}"
+                    f"[BARGE-IN] VAD speech {speech_count}/{VAD_BARGE_IN_CONFIRM_CHUNKS} "
+                    f"(mic={mic_energy:.3f} > thresh={echo_threshold:.3f})"
                 )
                 if speech_count >= VAD_BARGE_IN_CONFIRM_CHUNKS:
                     print(f"[BARGE-IN] Confirmed by Silero VAD — interrupting TTS")
