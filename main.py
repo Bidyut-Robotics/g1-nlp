@@ -20,6 +20,7 @@ Key improvements:
   - Post-barge-in, captured preroll + live frames feed directly into PHASE 2
 """
 import ctypes
+import importlib.util
 import sys
 import os
 
@@ -41,7 +42,34 @@ from typing import Optional
 import numpy as np
 import sounddevice as sd
 import torch
-from openwakeword.model import Model
+
+
+def _import_openwakeword_model_direct():
+    """
+    Load openwakeword/model.py directly to avoid openwakeword.__init__,
+    which imports sklearn training utilities not needed for inference.
+    """
+    for base in sys.path:
+        model_py = pathlib.Path(base) / "openwakeword" / "model.py"
+        if not model_py.exists():
+            continue
+
+        spec = importlib.util.spec_from_file_location(
+            "openwakeword_model_direct", str(model_py)
+        )
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        if hasattr(module, "Model"):
+            return module.Model
+
+    raise ImportError(
+        "Could not load openwakeword model class from site-packages/openwakeword/model.py"
+    )
+
+
+Model = _import_openwakeword_model_direct()
 
 from core.config import get_tts_config, get_hardware_config, load_app_config
 from core.factory import ServiceFactory
