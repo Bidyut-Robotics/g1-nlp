@@ -40,6 +40,9 @@ from core.factory import ServiceFactory
 from services.actuation.ros_topic_dispatcher import ROSTopicDispatcher
 from services.reasoning.dialogue_manager import DialogueManager
 
+##Fix for sklearn
+import os
+os.environ['LD_PRELOAD'] = '/usr/lib/x86_64-linux-gnu/libgomp.so.1'
 
 # ── Audio capture constants ───────────────────────────────────────────────────
 WAKEWORD_SAMPLE_RATE = 16000
