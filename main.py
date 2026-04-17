@@ -23,6 +23,7 @@ import ctypes
 import importlib.util
 import sys
 import os
+import types
 
 # Method 1: Try to preload system libgomp globally
 try:
@@ -44,32 +45,29 @@ import sounddevice as sd
 import torch
 
 
-def _import_openwakeword_model_direct():
+def _install_openwakeword_verifier_stub() -> None:
     """
-    Load openwakeword/model.py directly to avoid openwakeword.__init__,
-    which imports sklearn training utilities not needed for inference.
+    Prevent openwakeword from importing sklearn-only training helpers at runtime.
+    This project only performs wake-word inference, not custom verifier training.
     """
-    for base in sys.path:
-        model_py = pathlib.Path(base) / "openwakeword" / "model.py"
-        if not model_py.exists():
-            continue
+    module_name = "openwakeword.custom_verifier_model"
+    if module_name in sys.modules:
+        return
 
-        spec = importlib.util.spec_from_file_location(
-            "openwakeword_model_direct", str(model_py)
+    stub = types.ModuleType(module_name)
+
+    def _unsupported_train_custom_verifier(*args, **kwargs):
+        raise RuntimeError(
+            "Custom verifier training is disabled in runtime mode. "
+            "Install sklearn in an isolated training environment if needed."
         )
-        if spec is None or spec.loader is None:
-            continue
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        if hasattr(module, "Model"):
-            return module.Model
 
-    raise ImportError(
-        "Could not load openwakeword model class from site-packages/openwakeword/model.py"
-    )
+    stub.train_custom_verifier = _unsupported_train_custom_verifier
+    sys.modules[module_name] = stub
 
 
-Model = _import_openwakeword_model_direct()
+_install_openwakeword_verifier_stub()
+from openwakeword.model import Model
 
 from core.config import get_tts_config, get_hardware_config, load_app_config
 from core.factory import ServiceFactory
