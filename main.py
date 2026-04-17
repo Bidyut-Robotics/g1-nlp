@@ -20,6 +20,7 @@ Key improvements:
   - Post-barge-in, captured preroll + live frames feed directly into PHASE 2
 """
 import ctypes
+import importlib.util
 import sys
 import os
 
@@ -41,7 +42,49 @@ from typing import Optional
 import numpy as np
 import sounddevice as sd
 import torch
-from openwakeword.model import Model
+
+
+def _resolve_openwakeword_model_class():
+    """
+    Import openwakeword Model robustly on systems where sklearn's bundled libgomp
+    crashes during package __init__ (common static TLS issue on ARM/Linux).
+    """
+    try:
+        from openwakeword.model import Model as WakeWordModel
+        return WakeWordModel
+    except Exception as exc:
+        exc_text = str(exc).lower()
+        is_tls_libgomp = (
+            "cannot allocate memory in static tls block" in exc_text
+            or "libgomp" in exc_text
+        )
+        if not is_tls_libgomp:
+            raise
+
+    # Fallback: bypass openwakeword.__init__ and load model.py directly.
+    for base in sys.path:
+        candidate = pathlib.Path(base) / "openwakeword" / "model.py"
+        if not candidate.exists():
+            continue
+
+        spec = importlib.util.spec_from_file_location(
+            "openwakeword_model_direct", str(candidate)
+        )
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        if hasattr(module, "Model"):
+            print("Loaded openwakeword Model via direct fallback import.")
+            return module.Model
+
+    raise ImportError(
+        "Failed to import openwakeword Model. Normal import hit TLS/libgomp issue "
+        "and direct fallback import could not locate openwakeword/model.py."
+    )
+
+
+Model = _resolve_openwakeword_model_class()
 
 from core.config import get_tts_config, get_hardware_config, load_app_config
 from core.factory import ServiceFactory
