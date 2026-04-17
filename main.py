@@ -41,7 +41,6 @@ from typing import Optional
 
 import numpy as np
 import sounddevice as sd
-import torch
 
 
 def _resolve_openwakeword_model_class():
@@ -90,6 +89,7 @@ from core.config import get_tts_config, get_hardware_config, load_app_config
 from core.factory import ServiceFactory
 from services.actuation.ros_topic_dispatcher import ROSTopicDispatcher
 from services.reasoning.dialogue_manager import DialogueManager
+import torch
 
 
 # ── Audio capture constants ───────────────────────────────────────────────────
