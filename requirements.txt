@@ -4,22 +4,28 @@
 # ── Foundation & Schemas ──────────────────────────────────────────────────
 pydantic>=2.0.0
 python-dotenv
+typing-extensions
 
 # ── ASR (Automatic Speech Recognition) ───────────────────────────────────
 faster-whisper>=1.0.0
+ctranslate2>=4.0.0
 
 # ── Wake Word Detection ────────────────────────────────────────────────────
 openwakeword>=0.6.0
+scikit-learn>=1.3.0
 
 # ── TTS (Text-to-Speech) ──────────────────────────────────────────────────
 piper-tts>=1.2.0
 
-# ── Audio Processing & VAD ─────────────────────────────────────────────────
+# ── Audio Processing / ML Runtime / VAD ───────────────────────────────────
 # NOTE: onnxruntime is replaced by onnxruntime-gpu in Docker/GPU environments.
 # The entrypoint script handles this swap automatically.
 onnxruntime>=1.15.0
 numpy<2.0.0
+scipy>=1.10.0
+torch
 requests
+httpx
 sounddevice
 pyaudio
 
@@ -30,8 +36,6 @@ groq>=0.4.0
 ollama>=0.1.8
 # OpenAI-compatible (Enterprise / GPT-4o)
 openai>=1.0.0
-# Async HTTP for raw Ollama API calls
-httpx
 
 # ── Dialogue & Intelligence ────────────────────────────────────────────────
 langgraph>=0.0.10
