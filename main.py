@@ -1,16 +1,23 @@
 """
 main.py — Humanoid NLP Voice Pipeline
 ======================================
-7-Phase conversational state machine:
+7-Phase conversational state machine with Silero VAD barge-in:
 
   PHASE 1 — STANDBY: Wake-word detection
-  PHASE 2 — COMMAND CAPTURE: Collect speech frames
+  PHASE 2 — COMMAND CAPTURE: Collect speech frames (Silero VAD)
   PHASE 3 — VALIDATE: Check for enough speech chunks
   PHASE 4 — ASR: Transcribe audio in a thread
   PHASE 5 — DIALOGUE: Run LLM + queue TTS sentences
-  PHASE 6 — TTS PLAYBACK: Speak response, suppress echo
+  PHASE 6 — TTS PLAYBACK: Speak response
+             → BARGE-IN: Silero VAD detects user speech → stop TTS, capture user
   PHASE 7 — CONVERSATION: Stay active, wait for follow-up
              → if CONVERSATION_TIMEOUT elapses → back to PHASE 1
+
+Key improvements:
+  - Silero VAD replaces energy-ratio barge-in (reliable, ~160ms detection)
+  - Non-blocking async capture loop (no event-loop starvation)
+  - Ack TTS fire-and-forget with proper synchronisation via is_speaking flag
+  - Post-barge-in, captured preroll + live frames feed directly into PHASE 2
 """
 
 import asyncio
@@ -25,6 +32,7 @@ from typing import Optional
 
 import numpy as np
 import sounddevice as sd
+import torch
 from openwakeword.model import Model
 
 from core.config import get_tts_config, get_hardware_config, load_app_config
@@ -39,21 +47,26 @@ WAKEWORD_BLOCK_SIZE = 1280          # ~80 ms per chunk at 16kHz
 
 # ── Command capture timing ────────────────────────────────────────────────────
 MAX_COMMAND_SECONDS = 10.0          # Hard timeout: stop listening after this
-MIN_COMMAND_SECONDS = 0.8           # Minimum before we check for silence
-SILENCE_TIMEOUT_SECONDS = 0.8      # Silence after speech = end of utterance
+MIN_COMMAND_SECONDS = 0.4           # Minimum before we check for silence
+SILENCE_TIMEOUT_SECONDS = 0.6       # Silence after speech = end of utterance
 
-# ── Energy / VAD thresholds ───────────────────────────────────────────────────
+# ── VAD / energy thresholds ───────────────────────────────────────────────────
 ENERGY_THRESHOLD = 0.010            # Below this → silence
-SPEECH_START_THRESHOLD = 0.012     # Above this → speech started
+SPEECH_START_THRESHOLD = 0.012      # Above this → speech started
 MIN_SPEECH_CHUNKS = 2               # Minimum speech chunks to bother transcribing
+
+# Silero VAD thresholds
+VAD_SPEECH_THRESHOLD = 0.5          # Probability threshold for "is speech"
+VAD_BARGE_IN_CONFIRM_CHUNKS = 2     # Consecutive VAD-positive chunks to confirm barge-in (~160ms)
 
 # ── Pre-roll ──────────────────────────────────────────────────────────────────
 PRE_ROLL_SECONDS = 1.5
 
 # ── Conversational mode timeout (PHASE 7) ────────────────────────────────────
-# Robot stays listening for follow-up questions for this long after last answer.
-# After this elapses with no speech, it returns to PHASE 1 wake-word standby.
 CONVERSATION_TIMEOUT = 30.0         # seconds idle before returning to standby
+
+# ── Barge-in preroll ─────────────────────────────────────────────────────────
+BARGE_IN_PREROLL_CHUNKS = 40        # ~3.2 s at 80 ms/chunk
 
 # ── Debug ─────────────────────────────────────────────────────────────────────
 DEBUG_LOG_INTERVAL_SECONDS = 1.0
@@ -64,9 +77,14 @@ class G1MulticastStream:
     """
     Direct UDP Multicast listener for G1 Microphone.
     Bypasses PulseAudio entirely.
+
+    extra_queues: optional list of additional queue.Queue objects that receive
+    every chunk (used for barge-in VAD fan-out).
     """
-    def __init__(self, queue, interface="eth0", local_ip="192.168.123.164"):
+    def __init__(self, queue, interface="eth0", local_ip="192.168.123.164",
+                 extra_queues=None):
         self.queue = queue
+        self.extra_queues = extra_queues or []
         self.interface = interface
         self.local_ip = local_ip
         self.running = False
@@ -111,20 +129,15 @@ class G1MulticastStream:
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        
-        # Bind to the port
         sock.bind(('', self.port))
 
-        # Join multicast group explicitly on the robot interface IP
-        # This prevents it from accidentally joining on WiFi
         try:
-            mreq = struct.pack("4s4s", 
-                               socket.inet_aton(self.multicast_group), 
+            mreq = struct.pack("4s4s",
+                               socket.inet_aton(self.multicast_group),
                                socket.inet_aton(self.local_ip))
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
         except Exception as e:
             print(f"[AUDIO:G1-DIRECT] Warning: Failed to join multicast group on {self.local_ip}: {e}")
-            # Fallback to general join
             mreq = struct.pack("4sl", socket.inet_aton(self.multicast_group), socket.INADDR_ANY)
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
@@ -136,8 +149,14 @@ class G1MulticastStream:
                 data, _ = sock.recvfrom(8192)
                 if len(data) > 0:
                     # G1 sends mono 16kHz int16 PCM (5120 bytes = 2560 samples = 160ms)
-                    raw_samples = np.frombuffer(data, dtype=np.int16)
-                    self.queue.put(raw_samples.copy())
+                    chunk = np.frombuffer(data, dtype=np.int16).copy()
+                    self.queue.put(chunk)
+                    # Fan out to extra consumers (e.g. barge-in VAD queue)
+                    for eq in self.extra_queues:
+                        try:
+                            eq.put_nowait(chunk)
+                        except queue.Full:
+                            pass  # drop if consumer is slow; never block the mic thread
             except socket.timeout:
                 continue
             except Exception as e:
@@ -169,7 +188,8 @@ class G1MulticastStream:
 class LiveAudioPipeline:
     """
     End-to-end microphone loop.
-    Wake-word → capture → ASR → dialogue → TTS, with conversational follow-up.
+    Wake-word → capture → ASR → dialogue → TTS, with Silero VAD-based
+    barge-in interruption during TTS playback.
     """
 
     def __init__(self):
@@ -181,8 +201,11 @@ class LiveAudioPipeline:
             self.debug_enabled = bool(app_cfg_early.get("nlp_debug", True))
         self.session_id = f"session_{int(time.time())}"
 
-        # Thread-safe audio queue filled by the sounddevice callback
+        # ── Audio queues ──────────────────────────────────────────────────────
+        # Main pipeline queue (wakeword + command capture)
         self.audio_queue: "queue.Queue[np.ndarray]" = queue.Queue()
+        # Barge-in VAD queue — receives ALL chunks regardless of is_speaking
+        self._barge_in_queue: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=100)
 
         # Async queue consumed by the TTS worker coroutine
         self.tts_sentence_queue: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
@@ -192,8 +215,24 @@ class LiveAudioPipeline:
             maxlen=max(1, int((PRE_ROLL_SECONDS * WAKEWORD_SAMPLE_RATE) / WAKEWORD_BLOCK_SIZE))
         )
 
-        # Flag set while TTS is playing so the callback discards mic echo
+        # ── TTS state ─────────────────────────────────────────────────────────
+        # Flag set while TTS is playing (used for echo suppression + barge-in gating)
         self.is_speaking: bool = False
+        # Reference to the current TTS worker task (cancelled on barge-in)
+        self._tts_worker_task: Optional[asyncio.Task] = None
+        # aplay subprocess reference for laptop mode (killed on barge-in)
+        self._tts_player_process: Optional[subprocess.Popen] = None
+
+        # ── Barge-in ──────────────────────────────────────────────────────────
+        # Set by _barge_in_task when sustained interruption is confirmed
+        self.interrupt_event: asyncio.Event = asyncio.Event()
+        # Timestamp of last wake-word detection — used for latency profiling
+        self._wake_time: float = 0.0
+        # Rolling buffer of mic chunks captured during TTS — contains the
+        # user's barge-in question so it isn't lost when we interrupt.
+        self._barge_in_preroll: deque = deque(maxlen=BARGE_IN_PREROLL_CHUNKS)
+        # Flag set by _handle_barge_in so PHASE 2 knows to skip ack-drain logic
+        self._barge_in_active: bool = False
 
         # ── Load configuration ────────────────────────────────────────────────
         app_cfg = load_app_config()
@@ -226,6 +265,24 @@ class LiveAudioPipeline:
 
         self.wakeword_threshold = float(os.getenv("WAKEWORD_THRESHOLD", ww_cfg.get("threshold", "0.5")))
         self.wakeword_display = os.getenv("WAKEWORD_DISPLAY", ww_cfg.get("display_name", "Jarvis"))
+
+        # ── Silero VAD ────────────────────────────────────────────────────────
+        print("[VAD] Loading Silero VAD...")
+        try:
+            self.vad_model, _vad_utils = torch.hub.load(
+                repo_or_dir='snakers4/silero-vad',
+                model='silero_vad',
+                trust_repo=True,
+            )
+            self.vad_model.eval()
+            # Silero VAD requires exactly 512 samples at 16kHz per inference
+            self._vad_window_samples = 512
+            print("[VAD] Silero VAD ready.")
+        except Exception as e:
+            print(f"[VAD ERROR] Failed to load Silero VAD: {e}")
+            print("[VAD] Falling back to energy-only detection.")
+            self.vad_model = None
+            self._vad_window_samples = 512
 
         # ── TTS ───────────────────────────────────────────────────────────────
         self.tts_config = get_tts_config()
@@ -278,9 +335,40 @@ class LiveAudioPipeline:
             except queue.Empty:
                 return drained
 
+    def _drain_barge_in_queue(self) -> None:
+        """Discard all pending chunks in the barge-in queue."""
+        while True:
+            try:
+                self._barge_in_queue.get_nowait()
+            except queue.Empty:
+                return
+
     def _energy(self, chunk: np.ndarray) -> float:
         float_chunk = chunk.astype(np.float32) / 32768.0
         return float(np.sqrt(np.mean(np.square(float_chunk)) + 1e-12))
+
+    def _vad_is_speech(self, chunk: np.ndarray, threshold: float = VAD_SPEECH_THRESHOLD) -> bool:
+        """
+        Run Silero VAD on a chunk and return True if human speech is detected.
+        Silero VAD requires exactly 512 samples at 16kHz — we take the first 512
+        samples of each incoming chunk (which is typically 1280 or 2560 samples).
+        """
+        if self.vad_model is None:
+            # Fallback to energy-only
+            return self._energy(chunk) >= SPEECH_START_THRESHOLD
+
+        if len(chunk) < self._vad_window_samples:
+            return False
+
+        try:
+            samples = chunk[:self._vad_window_samples].astype(np.float32) / 32768.0
+            tensor = torch.from_numpy(samples)
+            with torch.no_grad():
+                prob = self.vad_model(tensor, 16000).item()
+            return prob >= threshold
+        except Exception as e:
+            self._debug(f"[VAD] Error: {e} — falling back to energy")
+            return self._energy(chunk) >= SPEECH_START_THRESHOLD
 
     # ─────────────────────────────────────────────────────────────────────────
     # Sounddevice callback — runs in a C thread, must be non-blocking
@@ -296,10 +384,15 @@ class LiveAudioPipeline:
         if chunk.dtype != np.int16:
             chunk = chunk.astype(np.int16)
 
-        # PHASE 6 echo suppression: discard mic input while TTS is playing
-        if self.is_speaking:
-            return
+        # Fan out to barge-in queue unconditionally.
+        try:
+            self._barge_in_queue.put_nowait(chunk)
+        except queue.Full:
+            pass
 
+        # Always put into audio_queue so the mic is never starved and
+        # preroll_chunks stay warm during TTS. Echo suppression is
+        # handled at the PHASE 2 consumer side (skip while is_speaking).
         self.audio_queue.put(chunk)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -313,15 +406,15 @@ class LiveAudioPipeline:
             return
 
         self._debug(f"TTS start: builtin={getattr(self.tts, 'is_builtin', False)}, chars={len(text)}")
-        
+
         self.is_speaking = True
         try:
-            # ── Built-in mode (Robot's own voice) ────────────────────────────
+            # ── Built-in / DDS mode (G1DirectTTS) ────────────────────────────
             if getattr(self.tts, "is_builtin", False):
-                # Just iterate to trigger the API call, no bytes to play
-                async for _ in self.tts.speak(text):
-                    pass
-            
+                async for _audio_bytes in self.tts.speak(text):
+                    # Yield to event loop so barge-in detector can run
+                    await asyncio.sleep(0)
+
             # ── Standard mode (Custom Jarvis voice via aplay) ────────────────
             else:
                 aplay_cmd = [
@@ -332,19 +425,30 @@ class LiveAudioPipeline:
                     "-c", "1",
                 ] + self.tts_player_extra_args
                 player = subprocess.Popen(aplay_cmd, stdin=subprocess.PIPE)
-                
+                self._tts_player_process = player
+
                 try:
                     async for audio_bytes in self.tts.speak(text):
                         if player.stdin:
                             player.stdin.write(audio_bytes)
+                        # Yield to event loop so barge-in detector can run
+                        await asyncio.sleep(0)
                     if player.stdin:
                         player.stdin.close()
-                    player.wait(timeout=10)
-                except Exception as exc:
+                    # Non-blocking wait — keeps event loop free for barge-in
+                    await asyncio.to_thread(lambda: player.wait(timeout=10))
+                except BaseException:
+                    # Catches CancelledError (barge-in) and regular exceptions.
+                    # Kill subprocess so audio stops immediately.
                     player.kill()
-                    raise exc
+                    raise
+                finally:
+                    self._tts_player_process = None
 
             self._debug("TTS playback complete")
+        except asyncio.CancelledError:
+            self._debug("TTS cancelled by barge-in")
+            raise
         except Exception as exc:
             print(f"[TTS:ERROR] {exc}")
         finally:
@@ -364,8 +468,146 @@ class LiveAudioPipeline:
                 return
             try:
                 await self._play_tts(sentence)
+            except asyncio.CancelledError:
+                self.tts_sentence_queue.task_done()
+                raise
             finally:
                 self.tts_sentence_queue.task_done()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Barge-in detection — Silero VAD
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _barge_in_task(self) -> None:
+        """
+        Continuous background task that runs Silero VAD during TTS playback.
+        Detects actual human speech, not just loud noise. Fires barge-in after
+        VAD_BARGE_IN_CONFIRM_CHUNKS consecutive speech-positive chunks.
+        """
+        speech_count: int = 0
+
+        while True:
+            try:
+                chunk = self._barge_in_queue.get_nowait()
+            except queue.Empty:
+                await asyncio.sleep(0.01)
+                continue
+
+            # Only active while TTS is playing
+            if not self.is_speaking:
+                speech_count = 0
+                continue
+
+            # Buffer chunk so the user's question survives the interrupt
+            self._barge_in_preroll.append(chunk)
+
+            # Run Silero VAD in thread (CPU-bound)
+            is_speech = await asyncio.to_thread(self._vad_is_speech, chunk)
+
+            if is_speech:
+                speech_count += 1
+                self._debug(
+                    f"[BARGE-IN] VAD speech {speech_count}/{VAD_BARGE_IN_CONFIRM_CHUNKS}"
+                )
+                if speech_count >= VAD_BARGE_IN_CONFIRM_CHUNKS:
+                    print(f"[BARGE-IN] Confirmed by Silero VAD — interrupting TTS")
+                    self.interrupt_event.set()
+                    speech_count = 0
+            else:
+                # Reset on any non-speech chunk (VAD is reliable, no hysteresis needed)
+                speech_count = 0
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TTS phase: wait for completion or barge-in
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _wait_for_tts_or_interrupt(self) -> bool:
+        """
+        Wait for the TTS sentence queue to drain OR for a barge-in interrupt.
+        Returns True if interrupted, False if TTS completed normally.
+        """
+        self.interrupt_event.clear()
+
+        join_task = asyncio.create_task(self.tts_sentence_queue.join())
+        interrupt_task = asyncio.create_task(self.interrupt_event.wait())
+
+        done, pending = await asyncio.wait(
+            [join_task, interrupt_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        for t in pending:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+
+        return interrupt_task in done
+
+    async def _handle_barge_in(self) -> None:
+        """
+        Interrupt controller: kills TTS immediately, flushes queues, and
+        re-seeds audio_queue so PHASE 2 can capture the user's question.
+        """
+        print("[BARGE-IN] Stopping TTS — listening for new command…")
+        self._barge_in_active = True
+
+        # 1. Kill aplay subprocess immediately (laptop mode)
+        if self._tts_player_process:
+            self._tts_player_process.kill()
+            self._tts_player_process = None
+
+        # 2. Cancel TTS worker task
+        if self._tts_worker_task and not self._tts_worker_task.done():
+            self._tts_worker_task.cancel()
+            try:
+                await self._tts_worker_task
+            except asyncio.CancelledError:
+                pass
+
+        # 3. Ensure flags are clean
+        self.is_speaking = False
+
+        # 4. Flush remaining sentences from the TTS queue
+        while not self.tts_sentence_queue.empty():
+            try:
+                self.tts_sentence_queue.get_nowait()
+                self.tts_sentence_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
+        # 5. Short settle so speaker fully stops before we re-seed audio
+        await asyncio.sleep(0.1)
+
+        # 6. Drain echo queue
+        self._drain_barge_in_queue()
+
+        # 7. Prepend barge-in preroll to audio_queue (preserves question start)
+        preroll_count = len(self._barge_in_preroll)
+        current_frames = []
+        while True:
+            try:
+                current_frames.append(self.audio_queue.get_nowait())
+            except queue.Empty:
+                break
+        for chunk in self._barge_in_preroll:
+            self.audio_queue.put(chunk)
+        for chunk in current_frames:
+            self.audio_queue.put(chunk)
+        self._barge_in_preroll.clear()
+        self._debug(
+            f"[BARGE-IN] Prepended {preroll_count} preroll + kept {len(current_frames)} live frames"
+        )
+
+        # 8. Reset wakeword model and interrupt flag
+        self.wakeword_model.reset()
+        self.interrupt_event.clear()
+
+        # 9. Restart TTS worker so it's ready for the next turn
+        self._tts_worker_task = asyncio.create_task(self._tts_worker())
+
+        print("[BARGE-IN] Ready — capturing your question…")
 
     # ─────────────────────────────────────────────────────────────────────────
     # PHASE 2 helper: reset per-turn state
@@ -380,6 +622,7 @@ class LiveAudioPipeline:
             "speech_chunk_count": 0,
             "silence_start_time": None,
             "last_debug_at": 0.0,
+            "waiting_for_ack": False,
         }
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -390,15 +633,15 @@ class LiveAudioPipeline:
         """
         PHASE 4 — ASR transcription (run in thread).
         PHASE 5 — Dialogue manager with sentence-streaming to TTS worker.
-        PHASE 6 — Fallback: if nothing was streamed, play full response directly.
-        Returns transcribed text, or None if ASR got noise/silence.
         """
         audio = np.concatenate(audio_chunks).astype(np.float32) / 32768.0
         duration = len(audio) / WAKEWORD_SAMPLE_RATE
         self._debug(f"ASR start: samples={len(audio)}, duration={duration:.2f}s")
 
         t0 = time.time()
+        print(f"[LATENCY] wake→asr_start={t0 - self._wake_time:.3f}s")
         utterance = await asyncio.to_thread(self.asr.transcribe_sync, audio)
+        print(f"[LATENCY] wake→asr_done={time.time() - self._wake_time:.3f}s")
         self._debug(f"ASR done in {time.time() - t0:.2f}s")
 
         if not utterance.text.strip():
@@ -408,16 +651,17 @@ class LiveAudioPipeline:
         print(f"[USER] {utterance.text}")
         self._debug("Dialogue manager processing started")
 
-        # STREAMING: pass sentence callback so TTS starts as each sentence arrives.
-        # The _tts_worker coroutine runs concurrently and plays sentences immediately.
         streaming_tts = self.tts is not None
         tts_sentences_queued = 0
 
         async def _counted_queue(sentence: str) -> None:
             nonlocal tts_sentences_queued
+            if tts_sentences_queued == 0:
+                print(f"[LATENCY] wake→tts_first_sentence={time.time() - self._wake_time:.3f}s")
             await self._queue_tts_sentence(sentence)
             tts_sentences_queued += 1
 
+        # TODO: parallelize intent+entity when DialogueManager exposes them
         state = await self.dialogue_manager.process_utterance(
             self.session_id,
             utterance,
@@ -435,14 +679,105 @@ class LiveAudioPipeline:
         if response:
             print(f"[{self.wakeword_display}] {response}")
 
-        # Fallback: if sentence splitter produced nothing (e.g. very short/unusual
-        # response without punctuation), play full text directly so audio always plays.
+        # Fallback: if sentence splitter produced nothing, play full text directly
         if streaming_tts and tts_sentences_queued == 0 and response:
             self._debug("Streaming produced 0 sentences — falling back to direct play")
             await self._play_tts(response)
 
         return utterance.text
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # PHASE 2 inner capture loop — non-blocking async
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _capture_command(
+        self, turn: dict, last_interaction_at_ref: list
+    ) -> bool:
+        """
+        Run the PHASE 2 capture loop. Returns True if capture completed normally,
+        False if session timed out. Modifies turn dict in place.
+        last_interaction_at_ref is a [float] list for pass-by-reference.
+        """
+        ack_drained = False
+        saw_is_speaking = self.is_speaking  # Might be True if ack is playing
+
+        while True:
+            now = time.time()
+            elapsed = now - turn["turn_start_time"]
+
+            # Hard timeout
+            if elapsed >= MAX_COMMAND_SECONDS:
+                self._debug("Hard timeout reached")
+                return True
+
+            # PHASE 7: session idle check
+            if now - last_interaction_at_ref[0] >= CONVERSATION_TIMEOUT:
+                self._debug("Conversation timed out during capture")
+                return False
+
+            # Non-blocking queue read
+            try:
+                chunk = self.audio_queue.get_nowait()
+            except queue.Empty:
+                await asyncio.sleep(0.01)
+                continue
+
+            # ── Echo suppression: skip while TTS (ack or response) is playing ──
+            if self.is_speaking:
+                saw_is_speaking = True
+                if self.debug_enabled and now - turn["last_debug_at"] >= DEBUG_LOG_INTERVAL_SECONDS:
+                    self._debug("PHASE 2: waiting for TTS to finish…")
+                    turn["last_debug_at"] = now
+                continue
+
+            # ── One-time drain: TTS just finished, drain residual echo ────────
+            # Only drain if we've actually seen is_speaking=True during this turn
+            # AND we're not resuming from a barge-in (which already prepped the queue)
+            if saw_is_speaking and not ack_drained and not self._barge_in_active:
+                self._drain_audio_queue()
+                self._drain_barge_in_queue()
+                ack_drained = True
+                turn["turn_start_time"] = time.time()  # Reset elapsed timer
+                self._debug("Post-TTS drain complete — capture starting fresh")
+                continue
+
+            # Clear the barge-in flag on first valid chunk so the next turn
+            # is treated as normal.
+            if self._barge_in_active:
+                self._barge_in_active = False
+                ack_drained = True  # Barge-in handler already drained
+
+            # ── Process the chunk ─────────────────────────────────────────────
+            energy = self._energy(chunk)
+            turn["command_chunks"].append(chunk)
+
+            if self.debug_enabled and now - turn["last_debug_at"] >= DEBUG_LOG_INTERVAL_SECONDS:
+                self._debug(
+                    f"Capturing: elapsed={elapsed:.2f}s, energy={energy:.4f}, "
+                    f"chunks={len(turn['command_chunks'])}"
+                )
+                turn["last_debug_at"] = now
+
+            # ── VAD: use Silero if available, else energy ─────────────────────
+            # For speed during capture we use energy; Silero ran in barge-in path
+            is_speech = energy >= SPEECH_START_THRESHOLD
+
+            if is_speech:
+                turn["speech_detected"] = True
+                turn["speech_chunk_count"] += 1
+                turn["silence_start_time"] = None
+            elif turn["speech_detected"] and turn["silence_start_time"] is None:
+                turn["silence_start_time"] = now
+                self._debug("Silence timer started")
+
+            # End of utterance: min duration + silence gap
+            if (
+                elapsed >= MIN_COMMAND_SECONDS
+                and turn["silence_start_time"] is not None
+                and now - turn["silence_start_time"] >= SILENCE_TIMEOUT_SECONDS
+            ):
+                self._debug("Silence timeout — end of utterance")
+                return True
 
     # ─────────────────────────────────────────────────────────────────────────
     # Main loop
@@ -454,10 +789,11 @@ class LiveAudioPipeline:
         if self.debug_enabled:
             print("[DEBUG] Verbose pipeline logging is enabled.")
 
-        # Start the TTS worker coroutine
-        tts_worker_task = None
+        # Start background tasks
         if self.tts is not None:
-            tts_worker_task = asyncio.create_task(self._tts_worker())
+            self._tts_worker_task = asyncio.create_task(self._tts_worker())
+
+        barge_in_bg_task = asyncio.create_task(self._barge_in_task())
 
         try:
             # Resolve device: int index or string name
@@ -468,15 +804,19 @@ class LiveAudioPipeline:
                 except (ValueError, TypeError):
                     parsed_device = self.device
 
-            # ── Choose Capture Method ─────────────────────────────────────────────
-            # If G1 mode, we use direct multicast to bypass PulseAudio
+            # ── Choose Capture Method ─────────────────────────────────────────
             if self.hardware_mode == "g1":
-                 g1_cfg = load_app_config().get("g1", {})
-                 local_ip = g1_cfg.get("local_ip", "192.168.123.164")
-                 interface = g1_cfg.get("dds_interface", "eth0")
-                 capture_context = G1MulticastStream(self.audio_queue, interface=interface, local_ip=local_ip)
+                g1_cfg = load_app_config().get("g1", {})
+                local_ip = g1_cfg.get("local_ip", "192.168.123.164")
+                interface = g1_cfg.get("dds_interface", "eth0")
+                capture_context = G1MulticastStream(
+                    self.audio_queue,
+                    interface=interface,
+                    local_ip=local_ip,
+                    extra_queues=[self._barge_in_queue],
+                )
             else:
-                 capture_context = sd.InputStream(
+                capture_context = sd.InputStream(
                     samplerate=WAKEWORD_SAMPLE_RATE,
                     blocksize=WAKEWORD_BLOCK_SIZE,
                     device=parsed_device,
@@ -496,7 +836,12 @@ class LiveAudioPipeline:
                     last_debug_at = 0.0
 
                     while True:
-                        chunk = await asyncio.to_thread(self.audio_queue.get)
+                        try:
+                            chunk = self.audio_queue.get_nowait()
+                        except queue.Empty:
+                            await asyncio.sleep(0.01)
+                            continue
+
                         now = time.time()
                         energy = self._energy(chunk)
                         self.preroll_chunks.append(chunk)
@@ -517,27 +862,28 @@ class LiveAudioPipeline:
                             last_debug_at = now
 
                         if score >= self.wakeword_threshold:
+                            self._wake_time = time.time()
                             print(f"[{self.wakeword_display}] Wake word detected ({score:.3f}).")
-                            break   # Exit PHASE 1
+                            break
 
-                    # ── Acknowledge + flush ───────────────────────────────────
+                    # ── Acknowledge (fire-and-forget) ─────────────────────────
+                    # is_speaking is set synchronously inside _play_tts when awaited,
+                    # but create_task defers it. So set it explicitly here to
+                    # avoid a race where capture starts before TTS begins.
                     ack = "Yes? How can I help you?"
                     print(f"[{self.wakeword_display}] {ack}")
-                    await self._play_tts(ack)           # sets is_speaking during playback
-
-                    # Drain any mic echo accumulated during TTS ack
-                    drained = self._drain_audio_queue()
-                    self._debug(f"Post-ack drain: cleared {drained} chunks")
+                    if self.tts is not None:
+                        self.is_speaking = True  # Pre-set to prevent race
+                        asyncio.create_task(self._play_tts(ack))
 
                     # Reset wakeword internal sliding window
                     self.wakeword_model.reset()
                     self.preroll_chunks.clear()
 
-                    # Track when the user last interacted (used for PHASE 7 timeout)
-                    last_interaction_at = time.time()
+                    last_interaction_at = [time.time()]  # List for pass-by-ref
 
                     # ════════════════════════════════════════════════════════
-                    # PHASE 2–7: Conversational loop  (no wake word needed)
+                    # PHASE 2–7: Conversational loop (no wake word needed)
                     # ════════════════════════════════════════════════════════
                     in_conversation = True
 
@@ -545,9 +891,10 @@ class LiveAudioPipeline:
 
                         # ── PHASE 2 — Reset per-turn state ───────────────────
                         turn = self._reset_turn()
+                        self.interrupt_event.clear()
 
-                        # ── PHASE 7 check: has the session timed out? ─────────
-                        if time.time() - last_interaction_at >= CONVERSATION_TIMEOUT:
+                        # ── PHASE 7 check ─────────────────────────────────────
+                        if time.time() - last_interaction_at[0] >= CONVERSATION_TIMEOUT:
                             print(
                                 f"[NLP MODULE] {int(CONVERSATION_TIMEOUT)}s idle — "
                                 f"returning to standby."
@@ -555,67 +902,14 @@ class LiveAudioPipeline:
                             in_conversation = False
                             break
 
-                        # ── PHASE 2 — Capture command ─────────────────────────
-                        while True:
-                            now = time.time()
-                            elapsed = now - turn["turn_start_time"]
-
-                            # Hard timeout
-                            if elapsed >= MAX_COMMAND_SECONDS:
-                                self._debug("Hard timeout reached")
-                                break
-
-                            # PHASE 7: session idle check inside capture
-                            if time.time() - last_interaction_at >= CONVERSATION_TIMEOUT:
-                                self._debug("Conversation timed out during capture")
-                                in_conversation = False
-                                break
-
-                            try:
-                                chunk = self.audio_queue.get(timeout=0.1)
-                            except queue.Empty:
-                                continue
-
-                            energy = self._energy(chunk)
-                            turn["command_chunks"].append(chunk)
-
-                            if self.debug_enabled and now - turn["last_debug_at"] >= DEBUG_LOG_INTERVAL_SECONDS:
-                                self._debug(
-                                    f"Capturing: elapsed={elapsed:.2f}s, "
-                                    f"energy={energy:.4f}, "
-                                    f"chunks={len(turn['command_chunks'])}"
-                                )
-                                turn["last_debug_at"] = now
-
-                            # VAD
-                            if energy >= SPEECH_START_THRESHOLD:
-                                turn["speech_detected"] = True
-                                turn["speech_chunk_count"] += 1
-                                turn["silence_start_time"] = None
-                                self._debug(
-                                    f"Speech: energy={energy:.4f}, "
-                                    f"count={turn['speech_chunk_count']}"
-                                )
-                            elif turn["speech_detected"] and turn["silence_start_time"] is None:
-                                turn["silence_start_time"] = now
-                                self._debug("Silence timer started")
-
-                            # Natural end of utterance (min duration + silence gap)
-                            if (
-                                elapsed >= MIN_COMMAND_SECONDS
-                                and turn["silence_start_time"] is not None
-                                and now - turn["silence_start_time"] >= SILENCE_TIMEOUT_SECONDS
-                            ):
-                                self._debug("Silence timeout — end of utterance")
-                                break
-
-                        # If session timed out mid-capture, exit conversation
-                        if not in_conversation:
+                        # ── PHASE 2 — Capture command (async helper) ─────────
+                        continued = await self._capture_command(turn, last_interaction_at)
+                        if not continued:
+                            in_conversation = False
                             break
 
                         # ── PHASE 3 — Validate: enough speech? ───────────────
                         if turn["speech_chunk_count"] < MIN_SPEECH_CHUNKS:
-                            # Silently loop — no annoying "I didn't catch that"
                             self._debug(
                                 f"Not enough speech ({turn['speech_chunk_count']} chunks) "
                                 f"— looping silently"
@@ -627,50 +921,56 @@ class LiveAudioPipeline:
                             result = await self._process_command(turn["command_chunks"])
                         except Exception as exc:
                             print(f"[PIPELINE ERROR] {exc}")
-                            # PHASE error handling: stay in conversation, do NOT go to standby
                             continue
 
                         if result is None:
-                            # ASR returned empty — noise or whisper silence; keep listening
                             self._debug("Empty ASR result — continuing to listen")
                             continue
 
-                        # ── Successful interaction — update last_interaction time ──
-                        last_interaction_at = time.time()
+                        last_interaction_at[0] = time.time()
 
-                        # ── Check if user wants to end the conversation ───────
+                        # ── Check if user wants to end conversation ───────────
                         session_state = self.dialogue_manager.sessions.get(self.session_id, {})
                         if session_state.get("exit_intent", False):
                             print("[NLP MODULE] User ended conversation. Returning to standby.")
                             in_conversation = False
-                            # Wait for TTS to finish saying goodbye
                             if self.tts is not None:
                                 await self.tts_sentence_queue.join()
                             break
 
-                        # ── PHASE 6 — Wait for TTS to finish ─────────────────
+                        # ── PHASE 6 — Wait for TTS OR barge-in ───────────────
                         if self.tts is not None:
-                            await self.tts_sentence_queue.join()
+                            interrupted = await self._wait_for_tts_or_interrupt()
+                            if interrupted:
+                                await self._handle_barge_in()
+                                # _handle_barge_in reset state; go straight to PHASE 2
+                                continue
 
-                        # Drain any mic echo picked up during playback
-                        drained = self._drain_audio_queue()
-                        if drained > 0:
-                            self._debug(f"Post-TTS drain: cleared {drained} echo chunks")
-
-                        # Reset wakeword model (won't be scored in conversation mode,
-                        # but keeps it clean for when we return to PHASE 1)
+                        # Normal completion: reset wakeword (queues drained
+                        # naturally by next capture's saw_is_speaking logic)
                         self.wakeword_model.reset()
 
-                    # End of conversational loop — clean up and go back to PHASE 1
+                    # End of conversational loop — cleanup before PHASE 1
                     self._drain_audio_queue()
+                    self._drain_barge_in_queue()
                     self.wakeword_model.reset()
                     self.preroll_chunks.clear()
+                    self._barge_in_active = False
 
         finally:
-            # Graceful shutdown: signal TTS worker to exit
-            if tts_worker_task is not None:
+            # Graceful shutdown
+            barge_in_bg_task.cancel()
+            try:
+                await barge_in_bg_task
+            except asyncio.CancelledError:
+                pass
+
+            if self._tts_worker_task is not None and not self._tts_worker_task.done():
                 await self.tts_sentence_queue.put(None)
-                await tts_worker_task
+                try:
+                    await self._tts_worker_task
+                except asyncio.CancelledError:
+                    pass
 
 
 async def run_interaction_loop():

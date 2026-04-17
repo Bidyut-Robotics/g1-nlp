@@ -1,5 +1,5 @@
 {
-  "hardware_mode": "g1",
+  "hardware_mode": "laptop",
   "nlp_debug": true,
   "robot_info": {
     "name": "Jarvis",
@@ -26,7 +26,7 @@
       "model_name": "llama3.2:1b",
       "base_url": "http://localhost:11434",
       "temperature": 0.7,
-      "num_predict": 200,
+      "num_predict": 30,
       "num_ctx": 2048,
       "keep_alive": "30m"
     },
@@ -39,7 +39,7 @@
   },
 
   "tts": {
-    "mode": "g1_direct",
+    "mode": "local",
     "model_path": "models/en_US-lessac-medium.onnx",
     "hindi_model_path": "models/hi_IN-priyamvada-medium.onnx",
     "player": "aplay"
@@ -54,6 +54,6 @@
   "wake_word": {
     "model": "models/hey_jarvis_v0.1.onnx",
     "display_name": "Jarvis",
-    "threshold": 0.1
+    "threshold": 0.3
   }
 }
