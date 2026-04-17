@@ -19,9 +19,17 @@ Key improvements:
   - Ack TTS fire-and-forget with proper synchronisation via is_speaking flag
   - Post-barge-in, captured preroll + live frames feed directly into PHASE 2
 """
+import ctypes
+import sys
+import os
+
+# Method 1: Try to preload system libgomp globally
+try:
+    ctypes.CDLL('libgomp.so.1', mode=ctypes.RTLD_GLOBAL)
+except OSError:
+    pass
 
 import asyncio
-import os
 import pathlib
 import queue
 import subprocess
@@ -40,9 +48,6 @@ from core.factory import ServiceFactory
 from services.actuation.ros_topic_dispatcher import ROSTopicDispatcher
 from services.reasoning.dialogue_manager import DialogueManager
 
-##Fix for sklearn
-import os
-os.environ['LD_PRELOAD'] = '/usr/lib/x86_64-linux-gnu/libgomp.so.1'
 
 # ── Audio capture constants ───────────────────────────────────────────────────
 WAKEWORD_SAMPLE_RATE = 16000
