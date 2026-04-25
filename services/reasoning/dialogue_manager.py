@@ -3,7 +3,7 @@ import asyncio
 import datetime
 from typing import TypedDict, List, Dict, Any, Awaitable, Callable, Optional
 from core.interfaces import ILLMProvider
-from core.schemas import Utterance, NLPActionPayload
+from core.schemas import Utterance, NLPActionPayload, ActionType
 from core.config import load_app_config
 
 # ─── Week 1 feature flags (set to True to re-enable in Week 2+) ──────────────
@@ -79,12 +79,12 @@ class DialogueManager:
         
         # 1. FAST PATH: Check for simple queries (bypass LLM entirely)
         if self._is_simple_query(utterance.text):
+            state["extracted_actions"] = []   # handler may append gesture actions
             response_content = self._handle_simple_query(utterance.text, state)
             state["messages"].append({"role": "user", "content": utterance.text})
             state["messages"].append({"role": "assistant", "content": response_content})
             state["response_text"] = response_content
-            state["extracted_actions"] = []
-            # exit_intent is set inside _handle_simple_query for stop/bye patterns
+            # exit_intent and extracted_actions set inside _handle_simple_query
             return state
         
         # 2. Personalization: Inject Persona Profile if recognized (async)
@@ -135,10 +135,11 @@ class DialogueManager:
 
         # 7. Action Extraction (Gestures, Navigation)
         actions = await self.llm.extract_actions(response_content)
-        
+        gesture_actions = self._extract_gesture_actions(response_content)
+
         # 8. Update State
-        state["response_text"] = self._strip_actions(response_content)
-        state["extracted_actions"] = actions
+        state["response_text"] = self._strip_tags(response_content)
+        state["extracted_actions"] = actions + gesture_actions
         state["messages"].append({"role": "assistant", "content": state["response_text"]})
         
         # OPTIMIZATION: Reduce context window from 10 to 5 turns for faster processing
@@ -199,6 +200,7 @@ RULES:
 - If uncertain, say 'I'm not sure about that' or 'I don't have that information'.
 - Speak naturally, as if talking to a person face-to-face.
 
+
 {context_block}
 CONVERSATION HISTORY:
 {history_str}
@@ -235,23 +237,44 @@ ANSWER:"""
 
                 sentence = match.group(1).strip()
                 sentence_buffer = sentence_buffer[match.end():]
-                visible_sentence = self._strip_actions(sentence).replace("[TOOL: get_calendar_schedule]", "").strip().strip('"')
+                visible_sentence = self._strip_tags(sentence).replace("[TOOL: get_calendar_schedule]", "").strip().strip('"')
                 if visible_sentence:
                     await on_response_sentence(visible_sentence)
 
         print()
 
         if on_response_sentence:
-            tail = self._strip_actions(sentence_buffer).replace("[TOOL: get_calendar_schedule]", "").strip().strip('"')
+            tail = self._strip_tags(sentence_buffer).replace("[TOOL: get_calendar_schedule]", "").strip().strip('"')
             if tail:
                 await on_response_sentence(tail)
 
         return response_content
 
     def _strip_actions(self, text: str) -> str:
-        """Removes the [ACTION: ...] tags from the text shown to the user."""
-        import re
+        """Removes [ACTION: ...] tags from text shown to the user."""
         return re.sub(r"\[ACTION:\s*.*?\]", "", text).strip()
+
+    def _strip_tags(self, text: str) -> str:
+        """Removes both [ACTION: ...] and [GESTURE: ...] tags from visible text."""
+        text = re.sub(r"\[ACTION:\s*.*?\]", "", text)
+        text = re.sub(r"\[GESTURE:\s*\w+\]", "", text)
+        return text.strip()
+
+    def _extract_gesture_actions(self, text: str) -> list:
+        """
+        Parse [GESTURE: gesture_name] tags emitted by the LLM and return
+        NLPActionPayload objects so the pipeline can execute them.
+        """
+        actions = []
+        for match in re.finditer(r"\[GESTURE:\s*(\w+)\]", text):
+            gesture_name = match.group(1).lower()
+            actions.append(
+                NLPActionPayload(
+                    action_type=ActionType.GESTURE,
+                    params={"gesture_name": gesture_name},
+                )
+            )
+        return actions
 
     def _is_schedule_query(self, text: str) -> bool:
         lowered = text.lower()
@@ -301,6 +324,9 @@ ANSWER:"""
             # Stop
             "stop", "never mind", "nevermind", "cancel", "dismiss",
             "quit", "exit", "bye", "goodbye", "see you",
+            # Handshake
+            "shake hand", "shake my hand", "handshake", "want to shake",
+            "can you shake",
         ]
         if any(p in lowered for p in fast_patterns):
             return True
@@ -347,20 +373,45 @@ ANSWER:"""
         # Stop / dismiss — set exit_intent so the main loop can break
         if any(p in lowered for p in ["stop", "never mind", "nevermind", "cancel", "dismiss", "quit", "exit", "bye", "goodbye", "see you"]):
             state["exit_intent"] = True
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "wave_goodbye"})
+            )
             return "Alright, goodbye! I'll be here if you need anything."
+
+        # Handshake (explicit request)
+        if any(p in lowered for p in ["shake hand", "shake my hand", "handshake", "want to shake", "can you shake"]):
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "shake_hand"})
+            )
+            return "Of course! Please extend your hand."
 
         # Greetings
         if lowered in {"hello", "hi there", "hey"}:
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "wave_hello"})
+            )
             return f"Hello! How can I help you?"
         if "good morning" in lowered:
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "wave_hello"})
+            )
             return "Good morning! What can I do for you?"
         if "good afternoon" in lowered:
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "wave_hello"})
+            )
             return "Good afternoon! How can I help?"
         if "good evening" in lowered:
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "wave_hello"})
+            )
             return "Good evening! What do you need?"
 
         # Acknowledgements
         if lowered in {"thanks", "thank you"}:
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "bow"})
+            )
             return "You're welcome!"
         if lowered in {"ok", "okay", "got it", "alright"}:
             return "Got it."

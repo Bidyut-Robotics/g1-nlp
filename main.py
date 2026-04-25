@@ -37,7 +37,9 @@ from openwakeword.model import Model
 
 from core.config import get_tts_config, get_hardware_config, load_app_config
 from core.factory import ServiceFactory
+from core.schemas import ActionType
 from services.actuation.ros_topic_dispatcher import ROSTopicDispatcher
+from services.gesture.gesture_service import GestureService
 from services.reasoning.dialogue_manager import DialogueManager
 
 
@@ -53,16 +55,19 @@ SILENCE_TIMEOUT_SECONDS = 0.6       # Silence after speech = end of utterance
 # ── VAD / energy thresholds ───────────────────────────────────────────────────
 ENERGY_THRESHOLD = 0.010            # Below this → silence
 SPEECH_START_THRESHOLD = 0.012      # Above this → speech started
-MIN_SPEECH_CHUNKS = 2               # Minimum speech chunks to bother transcribing
+MIN_SPEECH_CHUNKS = 3               # Minimum speech chunks before ASR (~240ms of actual speech)
 
 # Silero VAD thresholds
 VAD_SPEECH_THRESHOLD = 0.5          # Probability threshold for "is speech"
-VAD_BARGE_IN_CONFIRM_CHUNKS = 5     # Consecutive VAD-positive chunks to confirm barge-in (~400ms)
-# Energy gate applied BEFORE Silero VAD to reject laptop speaker echo.
-# Mic energy must exceed TTS output energy × this ratio; raise if false triggers persist.
-BARGE_IN_ECHO_REJECT_RATIO = 1.8
-# Absolute minimum mic energy — barge-in won't fire in a silent room.
-BARGE_IN_MIN_MIC_ENERGY = 0.020
+# Absolute mic energy floor for barge-in. Chunks below this are discarded before Silero.
+# Laptop room noise ≈ 0.008-0.012; normal speech at 50cm ≈ 0.03-0.15.
+# Raise this if TTS echo triggers false barge-in; lower if your voice isn't detected.
+BARGE_IN_MIN_MIC_ENERGY = 0.035
+
+# ── Barge-in grace period ─────────────────────────────────────────────────────
+# Ignore barge-in for this many seconds after each TTS sentence starts.
+# Short enough to allow barge-in mid-sentence; long enough to skip initial speaker burst.
+BARGE_IN_GRACE_SECONDS = 0.3
 
 # ── Pre-roll ──────────────────────────────────────────────────────────────────
 PRE_ROLL_SECONDS = 1.5
@@ -72,6 +77,12 @@ CONVERSATION_TIMEOUT = 30.0         # seconds idle before returning to standby
 
 # ── Barge-in preroll ─────────────────────────────────────────────────────────
 BARGE_IN_PREROLL_CHUNKS = 40        # ~3.2 s at 80 ms/chunk
+
+# ── Post-TTS echo decay ───────────────────────────────────────────────────────
+# After TTS stops, the speaker physically rings down and the soundcard buffer
+# still drains for ~200-400ms. All mic audio during this window is discarded
+# so it can't be captured as user speech and fed to ASR.
+ECHO_DECAY_SECONDS = 0.5
 
 # ── Debug ─────────────────────────────────────────────────────────────────────
 DEBUG_LOG_INTERVAL_SECONDS = 1.0
@@ -223,6 +234,8 @@ class LiveAudioPipeline:
         # ── TTS state ─────────────────────────────────────────────────────────
         # Flag set while TTS is playing (used for echo suppression + barge-in gating)
         self.is_speaking: bool = False
+        # Timestamp set when TTS finishes — used to enforce ECHO_DECAY_SECONDS window
+        self._tts_stop_time: float = 0.0
         # Reference to the current TTS worker task (cancelled on barge-in)
         self._tts_worker_task: Optional[asyncio.Task] = None
         # aplay subprocess reference for laptop mode (killed on barge-in)
@@ -236,6 +249,12 @@ class LiveAudioPipeline:
         # Rolling buffer of mic chunks captured during TTS — contains the
         # user's barge-in question so it isn't lost when we interrupt.
         self._barge_in_preroll: deque = deque(maxlen=BARGE_IN_PREROLL_CHUNKS)
+        # RMS energy of the last TTS audio chunk sent to the speaker.
+        # Used by the energy gate in _barge_in_task to reject echo.
+        self._tts_output_energy: float = 0.0
+        # Barge-in is suppressed until this timestamp — set at TTS start
+        # to give the speaker time to ramp up without false-triggering.
+        self._barge_in_suppress_until: float = 0.0
         # Flag set by _handle_barge_in so PHASE 2 knows to skip ack-drain logic
         self._barge_in_active: bool = False
 
@@ -247,6 +266,20 @@ class LiveAudioPipeline:
         self.hardware_mode = hw_cfg["mode"]
         self.device = os.getenv("MIC_DEVICE") or hw_cfg["mic_device"]
         self.tts_player_extra_args: list = hw_cfg.get("tts_player_extra_args", [])
+
+        # ── PulseAudio WebRTC Echo Cancellation (laptop mode only) ────────────
+        # G1 uses direct UDP multicast mic — PulseAudio not in the path.
+        if self.hardware_mode == "laptop" and not self.device:
+            laptop_cfg = app_cfg.get("laptop", {})
+            if laptop_cfg.get("echo_cancel", False):
+                from services.hardware.echo_cancel import setup
+                ec_source = setup()
+                if ec_source:
+                    # echocancel is now the PA default source.
+                    # Leave self.device = None so sounddevice uses the PA default,
+                    # which is now the AEC-filtered mic regardless of PortAudio backend.
+                    print(f"[AEC] Using default PA source '{ec_source}' (device=None)")
+
         print(f"[HARDWARE] mode={self.hardware_mode.upper()}, mic_device={self.device or 'system default'}")
 
         # ── Wake-word model ───────────────────────────────────────────────────
@@ -321,6 +354,24 @@ class LiveAudioPipeline:
             print(f"[TTS] Expected model path: {configured_model}")
             print(f"[TTS] Expected config path: {configured_model}.json")
             print(f"[TTS] Player command: {self.tts_player}")
+
+        # ── Gesture service ───────────────────────────────────────────────────
+        # On G1: uses LocoClient over DDS (already initialized by TTS above).
+        # On laptop: stub mode — gestures are printed, not executed.
+        try:
+            if self.hardware_mode == "g1":
+                g1_cfg = load_app_config().get("g1", {})
+                gestures_enabled = g1_cfg.get("gestures_enabled", True)
+                self.gesture_service = GestureService(
+                    interface=g1_cfg.get("dds_interface", "eth0"),
+                    enabled=gestures_enabled,
+                )
+                print(f"[GESTURE] gestures_enabled={gestures_enabled}")
+            else:
+                self.gesture_service = GestureService(enabled=False)
+        except Exception as exc:
+            print(f"[GESTURE] Disabled: {exc}")
+            self.gesture_service = None
 
     # ─────────────────────────────────────────────────────────────────────────
     # Utility helpers
@@ -458,6 +509,8 @@ class LiveAudioPipeline:
             print(f"[TTS:ERROR] {exc}")
         finally:
             self.is_speaking = False
+            self._tts_stop_time = time.time()  # marks when speaker goes silent
+            self._tts_output_energy = 0.0      # reset gate so post-TTS silence isn't gated
 
     async def _queue_tts_sentence(self, sentence: str) -> None:
         cleaned = sentence.strip()
@@ -484,56 +537,33 @@ class LiveAudioPipeline:
 
     async def _barge_in_task(self) -> None:
         """
-        Continuous background task that runs Silero VAD during TTS playback.
-        Detects actual human speech, not just loud noise. Fires barge-in after
-        VAD_BARGE_IN_CONFIRM_CHUNKS consecutive speech-positive chunks.
-        """
-        speech_count: int = 0
+        Continuous background task: fires barge-in when mic energy exceeds
+        BARGE_IN_MIN_MIC_ENERGY during TTS playback.
 
+        Pure energy check (no Silero) — same approach as Vocalis.
+        Latency: one chunk duration (~80ms) after user starts speaking.
+        If the robot starts interrupting itself, raise BARGE_IN_MIN_MIC_ENERGY.
+        """
         while True:
             try:
                 chunk = self._barge_in_queue.get_nowait()
             except queue.Empty:
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.005)
                 continue
 
-            # Only active while TTS is playing
             if not self.is_speaking:
-                speech_count = 0
                 continue
 
-            # Buffer chunk so the user's question survives the interrupt
-            self._barge_in_preroll.append(chunk)
+            # Grace period: skip first BARGE_IN_GRACE_SECONDS of each response
+            if time.time() < self._barge_in_suppress_until:
+                continue
 
-            # ── Energy gate — rejects laptop speaker echo before calling Silero ──
-            # On laptop the mic is ~10cm from the speaker, so TTS audio bleeds into
-            # the mic and Silero correctly classifies it as speech.  We only proceed
-            # with VAD if the mic is noticeably louder than the TTS output itself.
             mic_energy = self._energy(chunk)
-            echo_threshold = max(
-                self._tts_output_energy * BARGE_IN_ECHO_REJECT_RATIO,
-                BARGE_IN_MIN_MIC_ENERGY,
-            )
-            if mic_energy < echo_threshold:
-                speech_count = 0  # reset — likely just echo, not a human voice
-                continue
-
-            # Run Silero VAD in thread (CPU-bound)
-            is_speech = await asyncio.to_thread(self._vad_is_speech, chunk)
-
-            if is_speech:
-                speech_count += 1
-                self._debug(
-                    f"[BARGE-IN] VAD speech {speech_count}/{VAD_BARGE_IN_CONFIRM_CHUNKS} "
-                    f"(mic={mic_energy:.3f} > thresh={echo_threshold:.3f})"
-                )
-                if speech_count >= VAD_BARGE_IN_CONFIRM_CHUNKS:
-                    print(f"[BARGE-IN] Confirmed by Silero VAD — interrupting TTS")
-                    self.interrupt_event.set()
-                    speech_count = 0
-            else:
-                # Reset on any non-speech chunk (VAD is reliable, no hysteresis needed)
-                speech_count = 0
+            if mic_energy >= BARGE_IN_MIN_MIC_ENERGY:
+                self._barge_in_preroll.append(chunk)
+                self._debug(f"[BARGE-IN] Energy trigger mic={mic_energy:.3f} — interrupting TTS")
+                print("[BARGE-IN] Interrupting TTS")
+                self.interrupt_event.set()
 
     # ─────────────────────────────────────────────────────────────────────────
     # TTS phase: wait for completion or barge-in
@@ -545,6 +575,8 @@ class LiveAudioPipeline:
         Returns True if interrupted, False if TTS completed normally.
         """
         self.interrupt_event.clear()
+        # Set grace period ONCE for the whole response, not per sentence.
+        self._barge_in_suppress_until = time.time() + BARGE_IN_GRACE_SECONDS
 
         join_task = asyncio.create_task(self.tts_sentence_queue.join())
         interrupt_task = asyncio.create_task(self.interrupt_event.wait())
@@ -595,8 +627,10 @@ class LiveAudioPipeline:
             except asyncio.QueueEmpty:
                 break
 
-        # 5. Short settle so speaker fully stops before we re-seed audio
-        await asyncio.sleep(0.1)
+        # 5. Settle window — let speaker physically stop and residual echo in the
+        # mic buffer decay before re-seeding audio_queue for PHASE 2 capture.
+        # 300ms matches typical speaker ring-down + laptop mic latency.
+        await asyncio.sleep(0.3)
 
         # 6. Drain echo queue
         self._drain_barge_in_queue()
@@ -693,6 +727,15 @@ class LiveAudioPipeline:
         if state["extracted_actions"]:
             self.ros_dispatcher.dispatch_many(state["extracted_actions"])
 
+        # Fire gestures concurrently with TTS so the robot moves while speaking
+        if self.gesture_service:
+            for action in state["extracted_actions"]:
+                if action.action_type == ActionType.GESTURE:
+                    gesture_name = action.params.get("gesture_name")
+                    if gesture_name:
+                        asyncio.create_task(self.gesture_service.execute(gesture_name))
+                        self._debug(f"Gesture task fired: {gesture_name}")
+
         response = state["response_text"].strip()
         if response:
             print(f"[{self.wakeword_display}] {response}")
@@ -716,8 +759,7 @@ class LiveAudioPipeline:
         False if session timed out. Modifies turn dict in place.
         last_interaction_at_ref is a [float] list for pass-by-reference.
         """
-        ack_drained = False
-        saw_is_speaking = self.is_speaking  # Might be True if ack is playing
+        echo_drained = False
 
         while True:
             now = time.time()
@@ -740,30 +782,41 @@ class LiveAudioPipeline:
                 await asyncio.sleep(0.01)
                 continue
 
-            # ── Echo suppression: skip while TTS (ack or response) is playing ──
+            # ── Echo suppression: skip while TTS is playing ───────────────────
             if self.is_speaking:
-                saw_is_speaking = True
                 if self.debug_enabled and now - turn["last_debug_at"] >= DEBUG_LOG_INTERVAL_SECONDS:
                     self._debug("PHASE 2: waiting for TTS to finish…")
                     turn["last_debug_at"] = now
                 continue
 
-            # ── One-time drain: TTS just finished, drain residual echo ────────
-            # Only drain if we've actually seen is_speaking=True during this turn
-            # AND we're not resuming from a barge-in (which already prepped the queue)
-            if saw_is_speaking and not ack_drained and not self._barge_in_active:
-                self._drain_audio_queue()
-                self._drain_barge_in_queue()
-                ack_drained = True
-                turn["turn_start_time"] = time.time()  # Reset elapsed timer
-                self._debug("Post-TTS drain complete — capture starting fresh")
-                continue
+            # ── Post-TTS echo decay window ─────────────────────────────────────
+            # Discard audio for ECHO_DECAY_SECONDS after TTS stops, regardless of
+            # whether is_speaking was observed True in this turn. This catches the
+            # direct-play fallback path where TTS finishes before _capture_command
+            # even starts. Barge-in path skips this — it already settled.
+            if not self._barge_in_active and self._tts_stop_time > 0:
+                time_since_tts = now - self._tts_stop_time
+                if time_since_tts < ECHO_DECAY_SECONDS:
+                    if self.debug_enabled and now - turn["last_debug_at"] >= DEBUG_LOG_INTERVAL_SECONDS:
+                        self._debug(
+                            f"Echo decay: {time_since_tts:.2f}/{ECHO_DECAY_SECONDS}s — discarding"
+                        )
+                        turn["last_debug_at"] = now
+                    continue
+                # Decay window just expired — flush any echo still in the queue
+                if not echo_drained:
+                    self._drain_audio_queue()
+                    self._drain_barge_in_queue()
+                    echo_drained = True
+                    turn["turn_start_time"] = time.time()
+                    self._debug("Post-TTS echo decay complete — capture starting fresh")
+                    continue
 
             # Clear the barge-in flag on first valid chunk so the next turn
             # is treated as normal.
             if self._barge_in_active:
                 self._barge_in_active = False
-                ack_drained = True  # Barge-in handler already drained
+                echo_drained = True  # barge-in handler already settled
 
             # ── Process the chunk ─────────────────────────────────────────────
             energy = self._energy(chunk)
@@ -892,6 +945,7 @@ class LiveAudioPipeline:
                     print(f"[{self.wakeword_display}] {ack}")
                     if self.tts is not None:
                         self.is_speaking = True  # Pre-set to prevent race
+                        self._barge_in_suppress_until = time.time() + BARGE_IN_GRACE_SECONDS
                         asyncio.create_task(self._play_tts(ack))
 
                     # Reset wakeword internal sliding window
