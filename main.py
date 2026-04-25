@@ -292,10 +292,18 @@ class LiveAudioPipeline:
                 print(f"[WAKEWORD] Loading custom model from path: {model_path}")
                 if not os.path.exists(model_path):
                     raise FileNotFoundError(f"Wake-word model file not found at: {model_path}")
-                self.wakeword_model = Model(wakeword_models=[model_path], inference_framework="onnx")
+                model_arg = [model_path]
             else:
                 print(f"[WAKEWORD] Initialized with standard name: '{self.wakeword_name}'")
-                self.wakeword_model = Model(wakeword_models=[self.wakeword_name], inference_framework="onnx")
+                model_arg = [self.wakeword_name]
+
+            try:
+                # openwakeword >= 0.5 uses wakeword_models
+                self.wakeword_model = Model(wakeword_models=model_arg, inference_framework="onnx")
+            except TypeError:
+                # older versions use wakeword_model_paths
+                self.wakeword_model = Model(wakeword_model_paths=model_arg, inference_framework="onnx")
+
             print(f"[WAKEWORD] Available keys in model: {list(self.wakeword_model.models.keys())}")
         except Exception as e:
             print(f"\n[NLP ERROR] Failed to load wake-word model: {e}")
