@@ -70,13 +70,9 @@ class GestureService:
             _time.sleep(3)            # hold position while user completes handshake
             c.ShakeHand()             # retract
 
-        elif gesture_name == "bow":
-            c.LowStand()
-            _time.sleep(1)
-            c.HighStand()
-
-        elif gesture_name == "attention":
-            c.HighStand()
+        elif gesture_name in ("bow", "attention"):
+            print(f"[GESTURE] '{gesture_name}' paused — not active in phase 1.")
+            return
 
         else:
             print(f"[GESTURE] Unknown gesture: '{gesture_name}' — ignored.")

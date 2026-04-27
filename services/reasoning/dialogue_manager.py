@@ -414,9 +414,6 @@ ANSWER:"""
 
         # Acknowledgements
         if lowered in {"thanks", "thank you"}:
-            state["extracted_actions"].append(
-                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "bow"})
-            )
             return "You're welcome!"
         if lowered in {"ok", "okay", "got it", "alright"}:
             return "Got it."
