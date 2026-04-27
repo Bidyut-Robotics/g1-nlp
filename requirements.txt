@@ -10,7 +10,6 @@ numpy>=1.24.0,<2.0.0          # <2.0 required by several audio/ML libs
 # ── Wake Word ─────────────────────────────────────────────────────────────
 openwakeword==0.6.0
 onnxruntime>=1.15.0            # CPU inference (use onnxruntime-gpu on CUDA systems)
-tflite-runtime>=2.14.0
 
 # ── ASR ───────────────────────────────────────────────────────────────────
 faster-whisper>=1.0.0
