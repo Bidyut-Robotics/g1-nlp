@@ -89,7 +89,8 @@ class DialogueManager:
             state["messages"].append({"role": "user", "content": utterance.text})
             state["messages"].append({"role": "assistant", "content": response_content})
             state["response_text"] = response_content
-            # exit_intent and extracted_actions set inside _handle_simple_query
+            if on_response_sentence:
+                await on_response_sentence(response_content)
             return state
         
         # 2. Personalization: Inject Persona Profile if recognized (async)
@@ -338,8 +339,8 @@ ANSWER:"""
 
         # Greetings / acks (exact match)
         exact_matches = {
-            "hello", "hi there", "hey", "good morning", "good afternoon", "good evening",
-            "thanks", "thank you", "ok", "okay", "yes", "no", "nope", "got it", "alright",
+            "hello", "hi", "hi there", "hey", "good morning", "good afternoon", "good evening",
+            "thanks", "thank you", "ok", "okay", "yes", "no", "nope", "got it", "alright", "hi jarvis"
         }
         if lowered in exact_matches:
             return True
@@ -384,14 +385,14 @@ ANSWER:"""
             return "Alright, goodbye! I'll be here if you need anything."
 
         # Handshake (explicit request)
-        if any(p in lowered for p in ["shake hand", "shake my hand", "handshake", "want to shake", "can you shake"]):
+        if any(p in lowered for p in ["shake hand", "shake my hand", "handshake", "want to shake", "can you shake", "can you shake my hand","give handshake"]):
             state["extracted_actions"].append(
                 NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "shake_hand"})
             )
             return "Of course! Please extend your hand."
 
         # Greetings
-        if lowered in {"hello", "hi there", "hey"}:
+        if lowered in {"hello", "hi", "hi there", "hey", "hi jarvis"}:
             state["extracted_actions"].append(
                 NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "wave_hello"})
             )
