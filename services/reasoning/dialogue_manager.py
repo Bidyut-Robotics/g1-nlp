@@ -60,9 +60,14 @@ class DialogueManager:
                 "exit_intent": False,
             }
         else:
-            # Reset exit_intent at the start of each turn
             self.sessions[session_id]["exit_intent"] = False
         return self.sessions[session_id]
+
+    def reset_session(self, session_id: str) -> None:
+        """Clear conversation history after barge-in so LLM answers fresh."""
+        if session_id in self.sessions:
+            self.sessions[session_id]["messages"] = []
+            self.sessions[session_id]["exit_intent"] = False
 
     async def process_utterance(
         self,

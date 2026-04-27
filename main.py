@@ -683,7 +683,10 @@ class LiveAudioPipeline:
         self.wakeword_model.reset()
         self.interrupt_event.clear()
 
-        # 9. Restart TTS worker so it's ready for the next turn
+        # 9. Clear conversation history so LLM answers the new question fresh
+        self.dialogue_manager.reset_session(self.session_id)
+
+        # 10. Restart TTS worker so it's ready for the next turn
         self._tts_worker_task = asyncio.create_task(self._tts_worker())
 
         print("[BARGE-IN] Ready — capturing your question…")
@@ -716,6 +719,12 @@ class LiveAudioPipeline:
         audio = np.concatenate(audio_chunks).astype(np.float32) / 32768.0
         duration = len(audio) / WAKEWORD_SAMPLE_RATE
         self._debug(f"ASR start: samples={len(audio)}, duration={duration:.2f}s")
+
+        # Reject captures that are mostly silence/echo — avoids hallucination
+        audio_rms = float(np.sqrt(np.mean(audio ** 2)))
+        if audio_rms < 0.010:
+            self._debug(f"Audio RMS {audio_rms:.4f} too low — skipping ASR")
+            return None
 
         t0 = time.time()
         print(f"[LATENCY] wake→asr_start={t0 - self._wake_time:.3f}s")
