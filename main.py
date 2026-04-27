@@ -62,7 +62,9 @@ VAD_SPEECH_THRESHOLD = 0.5          # Probability threshold for "is speech"
 # Absolute mic energy floor for barge-in. Chunks below this are discarded before Silero.
 # Laptop room noise ≈ 0.008-0.012; normal speech at 50cm ≈ 0.03-0.15.
 # Raise this if TTS echo triggers false barge-in; lower if your voice isn't detected.
-BARGE_IN_MIN_MIC_ENERGY = 0.035
+BARGE_IN_MIN_MIC_ENERGY = 0.035     # absolute floor — never trigger below this
+BARGE_IN_SNR_RATIO      = 3.5       # must exceed noise_floor × this to trigger
+NOISE_FLOOR_ALPHA       = 0.005     # EMA speed for noise floor update (slow)
 
 # ── Barge-in grace period ─────────────────────────────────────────────────────
 # Ignore barge-in for this many seconds after each TTS sentence starts.
@@ -257,6 +259,9 @@ class LiveAudioPipeline:
         self._barge_in_suppress_until: float = 0.0
         # Flag set by _handle_barge_in so PHASE 2 knows to skip ack-drain logic
         self._barge_in_active: bool = False
+        # Adaptive noise floor — updated from mic energy during silence.
+        # Barge-in threshold = max(noise_floor × SNR_RATIO, BARGE_IN_MIN_MIC_ENERGY)
+        self._noise_floor: float = 0.020
 
         # ── Load configuration ────────────────────────────────────────────────
         app_cfg = load_app_config()
@@ -559,17 +564,31 @@ class LiveAudioPipeline:
                 await asyncio.sleep(0.005)
                 continue
 
+            mic_energy = self._energy(chunk)
+
             if not self.is_speaking:
+                # Update noise floor during silence (slow EMA)
+                self._noise_floor = (
+                    (1 - NOISE_FLOOR_ALPHA) * self._noise_floor
+                    + NOISE_FLOOR_ALPHA * mic_energy
+                )
                 continue
 
             # Grace period: skip first BARGE_IN_GRACE_SECONDS of each response
             if time.time() < self._barge_in_suppress_until:
                 continue
 
-            mic_energy = self._energy(chunk)
-            if mic_energy >= BARGE_IN_MIN_MIC_ENERGY:
+            # Dynamic threshold adapts to ambient noise level
+            dynamic_threshold = max(
+                self._noise_floor * BARGE_IN_SNR_RATIO,
+                BARGE_IN_MIN_MIC_ENERGY,
+            )
+            if mic_energy >= dynamic_threshold:
                 self._barge_in_preroll.append(chunk)
-                self._debug(f"[BARGE-IN] Energy trigger mic={mic_energy:.3f} — interrupting TTS")
+                self._debug(
+                    f"[BARGE-IN] Energy trigger mic={mic_energy:.3f} "
+                    f"threshold={dynamic_threshold:.3f} (floor={self._noise_floor:.3f})"
+                )
                 print("[BARGE-IN] Interrupting TTS")
                 self.interrupt_event.set()
 
