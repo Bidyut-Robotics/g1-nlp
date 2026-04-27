@@ -1,50 +1,38 @@
-# Humanoid NLP Module — Complete Dependencies
-# GPU primary, CPU fallback handled at runtime via entrypoint.sh
+# Humanoid NLP — Python 3.10
+# Install: pip install -r requirements.txt
+# G1 robot: also install unitree_sdk2py manually (see bottom)
 
-# ── Foundation & Schemas ──────────────────────────────────────────────────
-pydantic>=2.0.0
-python-dotenv
+# ── Audio I/O ─────────────────────────────────────────────────────────────
+sounddevice>=0.4.6
+PyAudio>=0.2.14
+numpy>=1.24.0,<2.0.0          # <2.0 required by several audio/ML libs
 
-# ── ASR (Automatic Speech Recognition) ───────────────────────────────────
+# ── Wake Word ─────────────────────────────────────────────────────────────
+openwakeword==0.6.0
+onnxruntime>=1.15.0            # CPU inference (use onnxruntime-gpu on CUDA systems)
+tflite-runtime>=2.14.0
+
+# ── ASR ───────────────────────────────────────────────────────────────────
 faster-whisper>=1.0.0
 
-# ── Wake Word Detection ────────────────────────────────────────────────────
-openwakeword>=0.6.0
+# ── VAD (Silero) ──────────────────────────────────────────────────────────
+torch>=2.0.0                   # Silero VAD loaded via torch.hub
+torchaudio>=2.0.0
 
-# ── TTS (Text-to-Speech) ──────────────────────────────────────────────────
+# ── TTS ───────────────────────────────────────────────────────────────────
 piper-tts>=1.2.0
 
-# ── Audio Processing & VAD ─────────────────────────────────────────────────
-# NOTE: onnxruntime is replaced by onnxruntime-gpu in Docker/GPU environments.
-# The entrypoint script handles this swap automatically.
-onnxruntime>=1.15.0
-numpy<2.0.0
-requests
-sounddevice
-pyaudio
+# ── LLM (raw HTTP — no SDK needed) ────────────────────────────────────────
+httpx>=0.24.0                  # async HTTP for Ollama / Groq / OpenAI APIs
 
-# ── LLM Providers ─────────────────────────────────────────────────────────
-# Groq cloud inference
-groq>=0.4.0
-# Ollama local inference (Python client)
-ollama>=0.1.8
-# OpenAI-compatible (Enterprise / GPT-4o)
-openai>=1.0.0
-# Async HTTP for raw Ollama API calls
-httpx
-
-# ── Dialogue & Intelligence ────────────────────────────────────────────────
-langgraph>=0.0.10
-langchain>=0.1.0
-
-# ── Memory & RAG ──────────────────────────────────────────────────────────
+# ── Memory / RAG ──────────────────────────────────────────────────────────
 chromadb>=0.4.0
 
-# ── Enterprise Integration (REST API server) ──────────────────────────────
-fastapi>=0.100.0
-uvicorn
+# ── Config & Utilities ────────────────────────────────────────────────────
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+requests>=2.28.0
 
-# ── Robot Hardware (optional — only needed for G1 mode) ───────────────────
-# Install manually: pip install unitree_sdk2py
-# or follow: https://github.com/unitreerobotics/unitree_sdk2_python
-# unitree_sdk2py
+# ── G1 Robot hardware (install manually) ──────────────────────────────────
+# pip install unitree_sdk2py
+# Docs: https://github.com/unitreerobotics/unitree_sdk2_python
