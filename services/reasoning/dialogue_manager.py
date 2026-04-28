@@ -306,7 +306,7 @@ ANSWER:"""
         """
         Detect simple factual queries that bypass the LLM entirely.
         """
-        lowered = text.lower().strip()
+        lowered = re.sub(r'[^\w\s]', '', text.lower()).strip()
 
         fast_patterns = [
             # Time
@@ -332,7 +332,7 @@ ANSWER:"""
             "quit", "exit", "bye", "goodbye", "see you",
             # Handshake
             "shake hand", "shake my hand", "handshake", "want to shake",
-            "can you shake",
+            "can you shake", "hand shake", "give hand", "give handshake",
         ]
         if any(p in lowered for p in fast_patterns):
             return True
@@ -349,7 +349,7 @@ ANSWER:"""
     
     def _handle_simple_query(self, text: str, state: AgentState) -> str:
         """Handle simple factual queries without LLM."""
-        lowered = text.lower().strip()
+        lowered = re.sub(r'[^\w\s]', '', text.lower()).strip()
         now = datetime.datetime.now()
 
         # Time
@@ -385,7 +385,7 @@ ANSWER:"""
             return "Alright, goodbye! I'll be here if you need anything."
 
         # Handshake (explicit request)
-        if any(p in lowered for p in ["shake hand", "shake my hand", "handshake", "want to shake", "can you shake", "can you shake my hand","give handshake"]):
+        if any(p in lowered for p in ["shake hand", "shake my hand", "handshake", "want to shake", "can you shake", "can you shake my hand", "give handshake", "hand shake", "give hand"]):
             state["extracted_actions"].append(
                 NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "shake_hand"})
             )

@@ -578,13 +578,15 @@ class LiveAudioPipeline:
             if time.time() < self._barge_in_suppress_until:
                 continue
 
+            # Always buffer into preroll so speech start is captured before gate fires
+            self._barge_in_preroll.append(chunk)
+
             # Dynamic threshold adapts to ambient noise level
             dynamic_threshold = max(
                 self._noise_floor * BARGE_IN_SNR_RATIO,
                 BARGE_IN_MIN_MIC_ENERGY,
             )
-            if mic_energy >= dynamic_threshold:
-                self._barge_in_preroll.append(chunk)
+            if mic_energy >= dynamic_threshold and not self.interrupt_event.is_set():
                 self._debug(
                     f"[BARGE-IN] Energy trigger mic={mic_energy:.3f} "
                     f"threshold={dynamic_threshold:.3f} (floor={self._noise_floor:.3f})"
@@ -654,15 +656,14 @@ class LiveAudioPipeline:
             except asyncio.QueueEmpty:
                 break
 
-        # 5. Settle window — let speaker physically stop and residual echo in the
-        # mic buffer decay before re-seeding audio_queue for PHASE 2 capture.
-        # 300ms matches typical speaker ring-down + laptop mic latency.
-        await asyncio.sleep(0.3)
+        # 5. Short settle — G1 mic/speaker are physically separated so echo is minimal.
+        await asyncio.sleep(0.1)
 
         # 6. Drain echo queue
         self._drain_barge_in_queue()
 
-        # 7. Prepend barge-in preroll to audio_queue (preserves question start)
+        # 7. Prepend barge-in preroll to audio_queue (preserves question start).
+        # Cap live frames to the most recent ~1s — old frames are TTS echo, not speech.
         preroll_count = len(self._barge_in_preroll)
         current_frames = []
         while True:
@@ -670,6 +671,7 @@ class LiveAudioPipeline:
                 current_frames.append(self.audio_queue.get_nowait())
             except queue.Empty:
                 break
+        current_frames = current_frames[-12:]  # keep last ~1s only
         for chunk in self._barge_in_preroll:
             self.audio_queue.put(chunk)
         for chunk in current_frames:
