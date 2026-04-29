@@ -52,7 +52,7 @@
   },
 
   "asr": {
-    "model_size": "base",
+    "model_size": "small",
     "device": "cpu",
     "compute_type": "int8"
   },
