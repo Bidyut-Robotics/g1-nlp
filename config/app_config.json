@@ -54,7 +54,7 @@
   "asr": {
     "model_size": "medium",
     "device": "cpu",
-    "compute_type": "int8"
+    "compute_type": "float32"
   },
 
   "wake_word": {
