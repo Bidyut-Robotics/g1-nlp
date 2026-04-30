@@ -53,8 +53,8 @@
 
   "asr": {
     "model_size": "medium",
-    "device": "cpu",
-    "compute_type": "float32"
+    "device": "cuda",
+    "compute_type": "float16"
   },
 
   "wake_word": {
