@@ -14,8 +14,8 @@
   },
 
   "g1": {
-    "dds_interface": "eth0",
-    "local_ip": "192.168.123.164",
+    "dds_interface": "enP2p1s0",
+    "local_ip": "192.168.123.166",
     "mic_device_name": null,
     "speaker_player_args": [],
     "gestures_enabled": false
