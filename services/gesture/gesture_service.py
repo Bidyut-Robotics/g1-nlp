@@ -29,10 +29,15 @@ class GestureService:
             return
 
         try:
+            import os
             from unitree_sdk2py.core.channel import ChannelFactoryInitialize
             from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
 
             print(f"[GESTURE] Initializing LocoClient on {interface}…")
+            os.environ.setdefault(
+                "CYCLONEDDS_URI",
+                f"<CycloneDDS><Domain><General><NetworkInterfaceAddress>{interface}</NetworkInterfaceAddress></General></Domain></CycloneDDS>"
+            )
             try:
                 ChannelFactoryInitialize(0)
             except Exception:
