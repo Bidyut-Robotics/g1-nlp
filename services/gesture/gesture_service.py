@@ -34,7 +34,7 @@ class GestureService:
 
             print(f"[GESTURE] Initializing LocoClient on {interface}…")
             try:
-                ChannelFactoryInitialize(0, interface)
+                ChannelFactoryInitialize(0)
             except Exception:
                 pass  # Already initialized by TTS service — safe to continue
 
