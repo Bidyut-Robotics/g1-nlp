@@ -168,7 +168,10 @@ class G1MulticastStream:
                 if len(data) > 0:
                     # G1 sends mono 16kHz int16 PCM (5120 bytes = 2560 samples = 160ms)
                     chunk = np.frombuffer(data, dtype=np.int16).copy()
-                    self.queue.put(chunk)
+                    try:
+                        self.queue.put_nowait(chunk)
+                    except queue.Full:
+                        pass  # drop oldest-path chunk; never block the mic thread
                     # Fan out to extra consumers (e.g. barge-in VAD queue)
                     for eq in self.extra_queues:
                         try:
@@ -221,7 +224,7 @@ class LiveAudioPipeline:
 
         # ── Audio queues ──────────────────────────────────────────────────────
         # Main pipeline queue (wakeword + command capture)
-        self.audio_queue: "queue.Queue[np.ndarray]" = queue.Queue()
+        self.audio_queue: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=200)
         # Barge-in VAD queue — receives ALL chunks regardless of is_speaking
         self._barge_in_queue: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=100)
 
