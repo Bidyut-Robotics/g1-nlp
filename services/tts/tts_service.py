@@ -104,10 +104,6 @@ class G1DirectTTS(ITTSProvider):
             from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
 
             print(f"[TTS:G1-DIRECT] Initializing DDS PlayStream on {self.interface}...")
-            os.environ.setdefault(
-                "CYCLONEDDS_URI",
-                f"<CycloneDDS><Domain><General><NetworkInterfaceAddress>{self.interface}</NetworkInterfaceAddress></General></Domain></CycloneDDS>"
-            )
             ChannelFactoryInitialize(0)
             self._client = AudioClient()
             self._client.Init()
