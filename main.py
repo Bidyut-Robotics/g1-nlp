@@ -113,9 +113,21 @@ class G1MulticastStream:
 
     def _activate_mic(self):
         """Send Voice Service API command to start mic streaming (mode=1)."""
-        import json
+        import json, os
         try:
+            from unitree_sdk2py.core.channel import ChannelFactoryInitialize
             from unitree_sdk2py.rpc.client import Client
+
+            # Ensure DDS is initialized before RPC client
+            os.environ.setdefault(
+                "CYCLONEDDS_URI",
+                f"<CycloneDDS><Domain><General><NetworkInterfaceAddress>{self.local_ip}</NetworkInterfaceAddress></General></Domain></CycloneDDS>"
+            )
+            try:
+                ChannelFactoryInitialize(0)
+            except Exception:
+                pass  # already initialized
+
             API_SET_MODE = 1008
             vc = Client("voice", False)
             vc.SetTimeout(5.0)
