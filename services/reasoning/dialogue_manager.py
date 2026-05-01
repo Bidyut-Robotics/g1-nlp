@@ -333,6 +333,9 @@ ANSWER:"""
             # Handshake
             "shake hand", "shake my hand", "handshake", "want to shake",
             "can you shake", "hand shake", "give hand", "give handshake",
+            # Movement
+            "move forward", "go forward", "come forward", "walk forward", "come here", "come closer",
+            "move backward", "go back", "move back", "walk back", "step back", "go backward",
         ]
         if any(p in lowered for p in fast_patterns):
             return True
@@ -390,6 +393,18 @@ ANSWER:"""
                 NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "shake_hand"})
             )
             return "Of course! Please extend your hand."
+
+        if any(p in lowered for p in ["move forward", "go forward", "come forward", "walk forward", "come here", "come closer"]):
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "move_forward"})
+            )
+            return "Moving forward."
+
+        if any(p in lowered for p in ["move backward", "go back", "move back", "walk back", "step back", "go backward"]):
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "move_backward"})
+            )
+            return "Moving backward."
 
         # Greetings
         if lowered in {"hello", "hi", "hi there", "hey", "hi jarvis"}:

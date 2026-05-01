@@ -4,11 +4,13 @@ from typing import Optional
 
 # Logical gesture name → human-readable description
 GESTURE_CATALOG = {
-    "wave_hello":    "Wave hand (facing user)",
-    "wave_goodbye":  "Wave hand and turn around",
-    "shake_hand":    "Extend hand twice with 3s pause",
-    "bow":           "Lower then return to upright",
-    "attention":     "Stand upright (attention posture)",
+    "wave_hello":     "Wave hand (facing user)",
+    "wave_goodbye":   "Wave hand and turn around",
+    "shake_hand":     "Extend hand twice with 3s pause",
+    "bow":            "Lower then return to upright",
+    "attention":      "Stand upright (attention posture)",
+    "move_forward":   "Walk forward ~1 step then stop",
+    "move_backward":  "Walk backward ~1 step then stop",
 }
 
 
@@ -72,12 +74,22 @@ class GestureService:
 
         elif gesture_name == "shake_hand":
             c.ShakeHand()
-            _time.sleep(3)            # hold position while user completes handshake
+            _time.sleep(1)            # hold position while user completes handshake
             c.ShakeHand()             # retract
 
         elif gesture_name in ("bow", "attention"):
             print(f"[GESTURE] '{gesture_name}' paused — not active in phase 1.")
             return
+
+        elif gesture_name == "move_forward":
+            c.Move(0.3, 0, 0)
+            _time.sleep(1.0)
+            c.Move(0, 0, 0)
+
+        elif gesture_name == "move_backward":
+            c.Move(-0.3, 0, 0)
+            _time.sleep(1.0)
+            c.Move(0, 0, 0)
 
         else:
             print(f"[GESTURE] Unknown gesture: '{gesture_name}' — ignored.")
