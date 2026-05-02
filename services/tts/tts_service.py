@@ -94,6 +94,7 @@ class G1DirectTTS(ITTSProvider):
 
     def __init__(self, model_path: str = "models/en_US-lessac-medium.onnx", interface: str = "eth0"):
         self.interface = interface
+        self.model_path = model_path
         self.piper = PiperTTS(model_path)
         self._client = None
         self.stream_id = f"jarvis_{int(os.getpid())}"
