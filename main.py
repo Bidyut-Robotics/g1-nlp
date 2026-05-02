@@ -30,6 +30,46 @@ import time
 from collections import deque
 from typing import Optional
 
+# ── Unitree SDK DDS compatibility patch for Ubuntu 24.04 / AGX Thor ──────────
+# ChannelFactory.Init passes an XML config string to Domain() which causes
+# a buffer overflow / PRECONDITION_NOT_MET on newer platforms.
+# When CYCLONEDDS_URI is set, we patch Init to call Domain(id) with no config
+# so cyclonedds uses the env var instead. SDK file stays untouched.
+def _patch_unitree_channel_factory():
+    try:
+        import unitree_sdk2py.core.channel as _ch
+        from cyclonedds.domain import Domain
+        _original_init = _ch.ChannelFactory.Init
+
+        def _patched_init(self, id, networkInterface=None, qos=None):
+            if self.__class__._ChannelFactory__initialized:
+                return True
+            with self.__class__._ChannelFactory__init_lock:
+                if self.__class__._ChannelFactory__initialized:
+                    return True
+                try:
+                    self.__class__._ChannelFactory__domain = Domain(id)
+                except Exception as e:
+                    print(f"[ChannelFactory] create domain error: {e}")
+                    return False
+                try:
+                    from cyclonedds.domain import DomainParticipant
+                    self.__class__._ChannelFactory__participant = DomainParticipant(id)
+                except Exception as e:
+                    print(f"[ChannelFactory] create participant error: {e}")
+                    return False
+                self.__class__._ChannelFactory__qos = qos
+                self.__class__._ChannelFactory__initialized = True
+                return True
+
+        if os.environ.get("CYCLONEDDS_URI"):
+            _ch.ChannelFactory.Init = _patched_init
+            print("[PATCH] Unitree ChannelFactory patched for CYCLONEDDS_URI compatibility.")
+    except Exception as e:
+        print(f"[PATCH] ChannelFactory patch skipped: {e}")
+
+_patch_unitree_channel_factory()
+
 import numpy as np
 import sounddevice as sd
 import torch
