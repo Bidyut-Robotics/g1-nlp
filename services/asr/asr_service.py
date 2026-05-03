@@ -4,12 +4,23 @@ import numpy as np
 from core.interfaces import IASRProvider
 from core.schemas import Utterance
 
+# Minimum ratio of ASCII/Latin chars for a transcription to be considered valid English.
+# Whisper on unclear audio hallucinates non-Latin scripts — this catches that fast.
+_MIN_ASCII_RATIO = 0.80
+
+
+def _is_valid_english(text: str) -> bool:
+    if not text:
+        return False
+    ascii_chars = sum(1 for c in text if ord(c) < 128)
+    return (ascii_chars / len(text)) >= _MIN_ASCII_RATIO
+
 
 class FasterWhisperASR(IASRProvider):
     """
     On-device ASR using openai-whisper (PyTorch backend).
-    Uses torch.cuda directly — works on AGX Thor where CTranslate2 doesn't.
-    Falls back to faster-whisper if openai-whisper is not installed.
+    English-only: language is forced to "en" so Whisper skips language detection,
+    which eliminates the 15-20s hallucination delay on unclear audio.
     """
 
     def __init__(
@@ -19,13 +30,6 @@ class FasterWhisperASR(IASRProvider):
         compute_type: str = "float32",
     ):
         self.device = device
-        self.language_map = {
-            "en": "English",
-            "hi": "Hindi",
-            "te": "Telugu",
-            "ta": "Tamil",
-            "kn": "Kannada",
-        }
 
         print(f"[ASR] Loading Whisper '{model_size}' on {device}...")
         try:
@@ -56,31 +60,35 @@ class FasterWhisperASR(IASRProvider):
             result = self._model.transcribe(
                 audio_data,
                 beam_size=1,
-                language=None,
+                language="en",
                 condition_on_previous_text=False,
                 fp16=(self.device == "cuda"),
             )
             text = result["text"].strip()
-            lang = result.get("language", "en")
-            return text, lang, 1.0
+            return text, "en", 1.0
         else:
             segments, info = self._model.transcribe(
                 audio_data,
                 beam_size=1,
                 best_of=1,
-                language=None,
+                language="en",
                 condition_on_previous_text=False,
                 vad_filter=True,
                 vad_parameters=dict(min_silence_duration_ms=250),
             )
             text = " ".join(seg.text.strip() for seg in segments)
-            return text, info.language, info.language_probability
+            return text, "en", info.language_probability
 
     def transcribe_sync(self, audio_data: np.ndarray) -> Utterance:
         text, lang, confidence = self._transcribe_raw(audio_data)
+
+        if not _is_valid_english(text):
+            print(f"[ASR] Rejected hallucination: '{text[:60]}'")
+            text = ""
+
         return Utterance(
             text=text,
-            language=self.language_map.get(lang, lang),
+            language="English",
             confidence=confidence,
             timestamp=time.time(),
             id=f"asr_{int(time.time() * 1000)}",
