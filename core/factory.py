@@ -4,7 +4,7 @@ from .config import get_llm_config, get_tts_config, load_app_config
 from services.asr.asr_service import FasterWhisperASR
 from services.reasoning.llm_service import OllamaLLM, GroqLLM
 from services.reasoning.openai_service import EnterpriseChatGPT
-from services.tts.tts_service import PiperTTS, G1BuiltinTTS, G1DirectTTS
+from services.tts.tts_service import PiperTTS, G1BuiltinTTS, G1DirectTTS, G1BridgeTTS
 
 
 class ServiceFactory:
@@ -101,5 +101,14 @@ class ServiceFactory:
             interface = os.getenv("G1_DDS_INTERFACE", g1_cfg.get("dds_interface", "eth0"))
             speaker_id = int(os.getenv("G1_SPEAKER_ID", "1"))
             return G1BuiltinTTS(interface=interface, speaker_id=speaker_id)
+        elif mode == "g1_bridge":
+            # Piper on AGX → robot_agent TCP → DDS PlayStream
+            model_path = os.getenv(
+                "TTS_MODEL_PATH",
+                tts_config.get("model_path", "models/en_US-lessac-medium.onnx"),
+            )
+            agent_host = os.getenv("ROBOT_AGENT_HOST", "127.0.0.1")
+            agent_port = int(os.getenv("ROBOT_AGENT_PORT", "7789"))
+            return G1BridgeTTS(model_path=model_path, agent_host=agent_host, agent_port=agent_port)
         else:
             return PiperTTS()

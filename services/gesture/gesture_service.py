@@ -1,8 +1,8 @@
 import asyncio
+import json
+import socket
 import time as _time
-from typing import Optional
 
-# Logical gesture name → human-readable description
 GESTURE_CATALOG = {
     "wave_hello":     "Wave hand (facing user)",
     "wave_goodbye":   "Wave hand and turn around",
@@ -16,93 +16,50 @@ GESTURE_CATALOG = {
 
 class GestureService:
     """
-    Executes physical gestures on the Unitree G1 via LocoClient.
-    On laptop/stub mode (enabled=False) it only prints the gesture name.
-    All blocking SDK calls run in asyncio.to_thread so the event loop
-    stays free during gesture execution.
+    Sends gesture commands to robot_agent (127.0.0.1:7788) via TCP.
+    robot_agent runs on AGX and executes them via LocoClient over DDS.
     """
 
-    def __init__(self, interface: str = "eth0", enabled: bool = True):
+    def __init__(self, interface: str = "eth0", enabled: bool = True,
+                 server_host: str = "127.0.0.1", server_port: int = 7788):
         self.enabled = enabled
-        self._client = None
+        self.server_host = server_host
+        self.server_port = server_port
 
         if not enabled:
             print("[GESTURE] Stub mode — gestures will be logged only.")
             return
 
+        # Verify server is reachable
         try:
-            from unitree_sdk2py.core.channel import ChannelFactoryInitialize
-            from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
-
-            print(f"[GESTURE] Initializing LocoClient on {interface}…")
-            try:
-                ChannelFactoryInitialize(0)
-            except Exception:
-                pass  # Already initialized by TTS service — safe to continue
-
-            self._client = LocoClient()
-            self._client.SetTimeout(10.0)
-            self._client.Init()
-            print("[GESTURE] LocoClient ready.")
+            with socket.create_connection((server_host, server_port), timeout=3):
+                pass
+            print(f"[GESTURE] Connected to gesture server at {server_host}:{server_port}")
         except Exception as e:
-            print(f"[GESTURE ERROR] LocoClient init failed: {e}")
-            self._client = None
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Blocking SDK calls — always run via asyncio.to_thread
-    # ─────────────────────────────────────────────────────────────────────────
+            print(f"[GESTURE] Warning: gesture server not reachable ({e}) — will retry on each gesture")
 
     def _run_gesture(self, gesture_name: str) -> None:
-        c = self._client
-
-        if c is None:
+        if not self.enabled:
             print(f"[GESTURE:STUB] {gesture_name}")
             return
 
-        print(f"[GESTURE] ▶ {gesture_name}")
-
-        if gesture_name == "wave_hello":
-            c.WaveHand()
-
-        elif gesture_name == "wave_goodbye":
-            c.WaveHand(True)          # turns around and waves
-
-        elif gesture_name == "shake_hand":
-            c.ShakeHand()
-            _time.sleep(1)            # hold position while user completes handshake
-            c.ShakeHand()             # retract
-
-        elif gesture_name in ("bow", "attention"):
+        if gesture_name in ("bow", "attention"):
             print(f"[GESTURE] '{gesture_name}' paused — not active in phase 1.")
             return
 
-        elif gesture_name == "move_forward":
-            c.Move(0.3, 0, 0)
-            _time.sleep(1.0)
-            c.Move(0, 0, 0)
-
-        elif gesture_name == "move_backward":
-            c.Move(-0.3, 0, 0)
-            _time.sleep(1.0)
-            c.Move(0, 0, 0)
-
-        else:
+        if gesture_name not in GESTURE_CATALOG:
             print(f"[GESTURE] Unknown gesture: '{gesture_name}' — ignored.")
+            return
 
-        print(f"[GESTURE] ✓ {gesture_name} done.")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Public async API
-    # ─────────────────────────────────────────────────────────────────────────
+        print(f"[GESTURE] ▶ {gesture_name}")
+        try:
+            with socket.create_connection((self.server_host, self.server_port), timeout=5) as s:
+                s.send(json.dumps({"gesture": gesture_name}).encode())
+            print(f"[GESTURE] ✓ {gesture_name} sent.")
+        except Exception as e:
+            print(f"[GESTURE ERROR] {gesture_name} failed: {e}")
 
     async def execute(self, gesture_name: str) -> None:
-        """
-        Execute a named gesture without blocking the event loop.
-        Safe to fire-and-forget via asyncio.create_task().
-        """
-        if not self.enabled and self._client is None:
-            print(f"[GESTURE:STUB] {gesture_name}")
-            return
         try:
             await asyncio.to_thread(self._run_gesture, gesture_name)
         except Exception as e:

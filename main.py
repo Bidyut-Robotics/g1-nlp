@@ -30,45 +30,6 @@ import time
 from collections import deque
 from typing import Optional
 
-# ── Unitree SDK DDS compatibility patch for Ubuntu 24.04 / AGX Thor ──────────
-# ChannelFactory.Init passes an XML config string to Domain() which causes
-# a buffer overflow / PRECONDITION_NOT_MET on newer platforms.
-# When CYCLONEDDS_URI is set, we patch Init to call Domain(id) with no config
-# so cyclonedds uses the env var instead. SDK file stays untouched.
-def _patch_unitree_channel_factory():
-    try:
-        import unitree_sdk2py.core.channel as _ch
-        from cyclonedds.domain import Domain
-        _original_init = _ch.ChannelFactory.Init
-
-        def _patched_init(self, id, networkInterface=None, qos=None):
-            if self.__class__._ChannelFactory__initialized:
-                return True
-            with self.__class__._ChannelFactory__init_lock:
-                if self.__class__._ChannelFactory__initialized:
-                    return True
-                try:
-                    self.__class__._ChannelFactory__domain = Domain(id)
-                except Exception as e:
-                    print(f"[ChannelFactory] create domain error: {e}")
-                    return False
-                try:
-                    from cyclonedds.domain import DomainParticipant
-                    self.__class__._ChannelFactory__participant = DomainParticipant(id)
-                except Exception as e:
-                    print(f"[ChannelFactory] create participant error: {e}")
-                    return False
-                self.__class__._ChannelFactory__qos = qos
-                self.__class__._ChannelFactory__initialized = True
-                return True
-
-        if os.environ.get("CYCLONEDDS_URI"):
-            _ch.ChannelFactory.Init = _patched_init
-            print("[PATCH] Unitree ChannelFactory patched for CYCLONEDDS_URI compatibility.")
-    except Exception as e:
-        print(f"[PATCH] ChannelFactory patch skipped: {e}")
-
-_patch_unitree_channel_factory()
 
 import numpy as np
 import sounddevice as sd
@@ -152,41 +113,11 @@ class G1MulticastStream:
         self._voice_client = None
 
     def _activate_mic(self):
-        """Send Voice Service API command to start mic streaming (mode=1)."""
-        import json, os
-        try:
-            from unitree_sdk2py.core.channel import ChannelFactoryInitialize
-            from unitree_sdk2py.rpc.client import Client
-
-            try:
-                ChannelFactoryInitialize(0)
-            except Exception:
-                pass  # already initialized
-
-            API_SET_MODE = 1008
-            vc = Client("voice", False)
-            vc.SetTimeout(5.0)
-            vc._SetApiVerson("1.0.0.0")
-            vc._RegistApi(API_SET_MODE, 0)
-            code, _ = vc._Call(API_SET_MODE, json.dumps({"mode": 1}))
-            if code != 0:
-                print(f"[AUDIO:G1-DIRECT] Warning: Could not enable mic mode (code={code}). Check PC1 voice service.")
-            else:
-                print("[AUDIO:G1-DIRECT] Mic streaming activated (mode=1).")
-            self._voice_client = (vc, API_SET_MODE)
-        except Exception as e:
-            print(f"[AUDIO:G1-DIRECT] Warning: Failed to activate mic via voice API: {e}")
+        """Mic is activated by robot_agent at startup via DDS — nothing to do here."""
+        print("[AUDIO:G1-DIRECT] Mic activated by robot_agent (DDS).")
 
     def _deactivate_mic(self):
-        """Reset mic to idle mode (mode=2)."""
-        import json
-        if self._voice_client:
-            try:
-                vc, API_SET_MODE = self._voice_client
-                vc._Call(API_SET_MODE, json.dumps({"mode": 2}))
-                print("[AUDIO:G1-DIRECT] Mic streaming deactivated (mode=2).")
-            except Exception as e:
-                print(f"[AUDIO:G1-DIRECT] Warning: Failed to deactivate mic: {e}")
+        pass
 
     def _listen(self):
         import socket
