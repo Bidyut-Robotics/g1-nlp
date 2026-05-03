@@ -373,12 +373,15 @@ class DialogueManager:
             return f"We are at {self.robot_location}."
 
         # Company / creator
-        if any(p in lowered for p in ["which company", "what company", "who made you", "who built you", "who created you", "which organization", "what organization", "who do you work for", "who are you built by"]):
-            return f"I was built by {self.robot_company}."
+        if any(p in lowered for p in ["which company", "what company", "who made you", "who built you", "who created you", "which organization", "what organization", "who are you built by"]):
+            return "I don't have information about who built me."
+
+        if any(p in lowered for p in ["who do you work for", "where do you work", "which company do you work"]):
+            return f"I work at {self.robot_company}."
 
         # Identity
         if any(p in lowered for p in ["who are you", "what are you", "what's your name", "what is your name", "your name", "who is jarvis", "tell me about yourself"]):
-            return f"I'm {self.robot_name}, a {self.robot_role} built by {self.robot_company}."
+            return f"I'm {self.robot_name}, a {self.robot_role} working at {self.robot_company}."
 
         # Help / capabilities
         if any(p in lowered for p in ["what can you do", "help me", "help", "what do you do", "your capabilities"]):
