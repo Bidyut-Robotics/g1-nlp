@@ -134,9 +134,9 @@ static void handle_gesture_client(int fd) {
         } else if (gesture == "wave_goodbye") {
             ret = loco.WaveHand(true);
         } else if (gesture == "shake_hand") {
-            ret = loco.ShakeHand();
-            std::this_thread::sleep_for(std::chrono::milliseconds(3000));
-            ret = loco.ShakeHand();
+            ret = loco.ShakeHand(0);  // extend
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            ret = loco.ShakeHand(1);  // retract
         } else if (gesture == "move_forward") {
             ret = loco.Move(0.3f, 0.0f, 0.0f, false);
         } else if (gesture == "move_backward") {

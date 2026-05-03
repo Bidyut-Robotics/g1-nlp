@@ -1070,9 +1070,28 @@ async def run_interaction_loop():
 
 
 if __name__ == "__main__":
+    _ollama_proc = None
     try:
+        already_up = subprocess.call(
+            ["pgrep", "-x", "ollama"], stdout=subprocess.DEVNULL
+        ) == 0
+        if already_up:
+            print("[OLLAMA] Already running — skipping start.")
+        else:
+            _ollama_proc = subprocess.Popen(
+                ["ollama", "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print(f"[OLLAMA] Started (pid={_ollama_proc.pid})")
+        time.sleep(2)  # give ollama a moment to be ready
         asyncio.run(run_interaction_loop())
     except KeyboardInterrupt:
         print("\n[NLP MODULE] Shutting down...")
     except Exception as exc:
         print(f"\n[NLP ERROR] {exc}")
+    finally:
+        if _ollama_proc and _ollama_proc.poll() is None:
+            _ollama_proc.terminate()
+            _ollama_proc.wait(timeout=5)
+            print("[OLLAMA] Stopped.")
