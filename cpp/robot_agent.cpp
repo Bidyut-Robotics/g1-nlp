@@ -36,6 +36,7 @@
 #include <unitree/robot/client/client.hpp>
 #include <unitree/robot/g1/audio/g1_audio_client.hpp>
 #include <unitree/robot/g1/loco/g1_loco_client.hpp>
+#include <unitree/robot/g1/arm/g1_arm_action_client.hpp>
 
 // ─── Ports ───────────────────────────────────────────────────────────────────
 static constexpr int GESTURE_PORT = 7788;
@@ -123,7 +124,7 @@ static void handle_gesture_client(int fd) {
         std::cout << "[GESTURE] ▶ " << gesture << "\n";
         int32_t ret = 0;
 
-        // Create LocoClient only for the duration of the gesture so the
+        // Create clients only for the duration of the gesture so the
         // loco_service releases back to joystick mode when we're done.
         unitree::robot::g1::LocoClient loco;
         loco.Init();
@@ -134,9 +135,12 @@ static void handle_gesture_client(int fd) {
         } else if (gesture == "wave_goodbye") {
             ret = loco.WaveHand(true);
         } else if (gesture == "shake_hand") {
-            ret = loco.ShakeHand(0);  // extend
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            ret = loco.ShakeHand(1);  // retract
+            unitree::robot::g1::G1ArmActionClient arm;
+            arm.Init();
+            arm.SetTimeout(10.0f);
+            ret = arm.ExecuteAction(27);   // shake hand — extends arm
+            std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+            ret = arm.ExecuteAction(99);   // release arm — retracts
         } else if (gesture == "move_forward") {
             ret = loco.Move(0.3f, 0.0f, 0.0f, false);
         } else if (gesture == "move_backward") {
