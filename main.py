@@ -63,8 +63,8 @@ VAD_SPEECH_THRESHOLD = 0.5          # Probability threshold for "is speech"
 # Absolute mic energy floor for barge-in. Chunks below this are discarded before Silero.
 # Laptop room noise ≈ 0.008-0.012; normal speech at 50cm ≈ 0.03-0.15.
 # Raise this if TTS echo triggers false barge-in; lower if your voice isn't detected.
-BARGE_IN_MIN_MIC_ENERGY = 0.035     # absolute floor — never trigger below this
-BARGE_IN_SNR_RATIO      = 3.5       # must exceed noise_floor × this to trigger
+BARGE_IN_MIN_MIC_ENERGY = 0.025     # absolute floor — never trigger below this
+BARGE_IN_SNR_RATIO      = 2.5       # must exceed noise_floor × this to trigger
 NOISE_FLOOR_ALPHA       = 0.005     # EMA speed for noise floor update (slow)
 
 # ── Barge-in grace period ─────────────────────────────────────────────────────
@@ -538,6 +538,7 @@ class LiveAudioPipeline:
         Latency: one chunk duration (~80ms) after user starts speaking.
         If the robot starts interrupting itself, raise BARGE_IN_MIN_MIC_ENERGY.
         """
+        consecutive_above = 0  # require 2 chunks in a row to avoid single-spike false triggers
         while True:
             try:
                 chunk = self._barge_in_queue.get_nowait()
@@ -548,6 +549,7 @@ class LiveAudioPipeline:
             mic_energy = self._energy(chunk)
 
             if not self.is_speaking:
+                consecutive_above = 0
                 # Update noise floor during silence (slow EMA)
                 self._noise_floor = (
                     (1 - NOISE_FLOOR_ALPHA) * self._noise_floor
@@ -557,6 +559,7 @@ class LiveAudioPipeline:
 
             # Grace period: skip first BARGE_IN_GRACE_SECONDS of each response
             if time.time() < self._barge_in_suppress_until:
+                consecutive_above = 0
                 continue
 
             # Always buffer into preroll so speech start is captured before gate fires
@@ -567,13 +570,19 @@ class LiveAudioPipeline:
                 self._noise_floor * BARGE_IN_SNR_RATIO,
                 BARGE_IN_MIN_MIC_ENERGY,
             )
-            if mic_energy >= dynamic_threshold and not self.interrupt_event.is_set():
+            if mic_energy >= dynamic_threshold:
+                consecutive_above += 1
+            else:
+                consecutive_above = 0
+
+            if consecutive_above >= 2 and not self.interrupt_event.is_set():
                 self._debug(
                     f"[BARGE-IN] Energy trigger mic={mic_energy:.3f} "
                     f"threshold={dynamic_threshold:.3f} (floor={self._noise_floor:.3f})"
                 )
                 print("[BARGE-IN] Interrupting TTS")
                 self.interrupt_event.set()
+                consecutive_above = 0
 
     # ─────────────────────────────────────────────────────────────────────────
     # TTS phase: wait for completion or barge-in
@@ -583,8 +592,10 @@ class LiveAudioPipeline:
         """
         Wait for the TTS sentence queue to drain OR for a barge-in interrupt.
         Returns True if interrupted, False if TTS completed normally.
+        NOTE: interrupt_event is NOT cleared here — it may have been set during
+        LLM generation (while sentence 1 was already playing). Clearing it is
+        done at the START of each turn in _reset_turn/interrupt_event.clear().
         """
-        self.interrupt_event.clear()
         # Set grace period ONCE for the whole response, not per sentence.
         self._barge_in_suppress_until = time.time() + BARGE_IN_GRACE_SECONDS
 
