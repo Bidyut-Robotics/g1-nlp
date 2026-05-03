@@ -44,8 +44,9 @@ static constexpr int CHUNK_SIZE   = 96000;  // 3 s @ 16kHz mono int16
 
 // ─── Globals ─────────────────────────────────────────────────────────────────
 static unitree::robot::g1::AudioClient* g_audio = nullptr;
-static unitree::robot::g1::LocoClient* g_loco   = nullptr;
 static std::mutex g_audio_mutex;
+// LocoClient is NOT kept alive — it is created per-gesture and destroyed
+// immediately after so the robot's loco_service drops back to joystick mode.
 
 // ─── Voice service client (mic activation) ───────────────────────────────────
 class VoiceClient : public unitree::robot::Client {
@@ -122,18 +123,24 @@ static void handle_gesture_client(int fd) {
         std::cout << "[GESTURE] ▶ " << gesture << "\n";
         int32_t ret = 0;
 
+        // Create LocoClient only for the duration of the gesture so the
+        // loco_service releases back to joystick mode when we're done.
+        unitree::robot::g1::LocoClient loco;
+        loco.Init();
+        loco.SetTimeout(10.0f);
+
         if (gesture == "wave_hello") {
-            ret = g_loco->WaveHand(false);
+            ret = loco.WaveHand(false);
         } else if (gesture == "wave_goodbye") {
-            ret = g_loco->WaveHand(true);
+            ret = loco.WaveHand(true);
         } else if (gesture == "shake_hand") {
-            ret = g_loco->ShakeHand();
+            ret = loco.ShakeHand();
             std::this_thread::sleep_for(std::chrono::milliseconds(3000));
-            ret = g_loco->ShakeHand();
+            ret = loco.ShakeHand();
         } else if (gesture == "move_forward") {
-            ret = g_loco->Move(0.3f, 0.0f, 0.0f, false);
+            ret = loco.Move(0.3f, 0.0f, 0.0f, false);
         } else if (gesture == "move_backward") {
-            ret = g_loco->Move(-0.3f, 0.0f, 0.0f, false);
+            ret = loco.Move(-0.3f, 0.0f, 0.0f, false);
         } else {
             std::cout << "[GESTURE] Unknown: " << gesture << " — ignored\n";
         }
@@ -252,11 +259,7 @@ int main(int argc, char* argv[]) {
     g_audio->SetVolume(100);
     std::cout << "[AGENT] AudioClient ready\n";
 
-    // Init loco client
-    g_loco = new unitree::robot::g1::LocoClient();
-    g_loco->Init();
-    g_loco->SetTimeout(10.0f);
-    std::cout << "[AGENT] LocoClient ready\n";
+    std::cout << "[AGENT] LocoClient: lazy init per gesture (joystick stays active)\n";
 
     // Activate mic streaming (mode=1)
     try {
