@@ -956,20 +956,41 @@ class LiveAudioPipeline:
                             print(f"[{self.wakeword_display}] Wake word detected ({score:.3f}).")
                             break
 
-                    # ── Acknowledge (fire-and-forget) ─────────────────────────
-                    # is_speaking is set synchronously inside _play_tts when awaited,
-                    # but create_task defers it. So set it explicitly here to
-                    # avoid a race where capture starts before TTS begins.
-                    ack = "Yes? How can I help you?"
-                    print(f"[{self.wakeword_display}] {ack}")
-                    if self.tts is not None:
-                        self.is_speaking = True  # Pre-set to prevent race
-                        self._barge_in_suppress_until = time.time() + BARGE_IN_GRACE_SECONDS
-                        asyncio.create_task(self._play_tts(ack))
-
                     # Reset wakeword internal sliding window
                     self.wakeword_model.reset()
                     self.preroll_chunks.clear()
+
+                    # ── Sniff for inline question (500ms window) ──────────────
+                    # If user said "Hey Jarvis, what time is it?" in one breath,
+                    # the question audio arrives immediately after wake detection.
+                    # Collect it now; if speech is present skip the ack so PHASE 2
+                    # can process it without the ack TTS blocking the queue.
+                    _sniff_chunks = []
+                    _inline_speech = False
+                    _sniff_end = time.time() + 0.5
+                    while time.time() < _sniff_end:
+                        try:
+                            _c = self.audio_queue.get_nowait()
+                            _sniff_chunks.append(_c)
+                            if self._energy(_c) > SPEECH_START_THRESHOLD:
+                                _inline_speech = True
+                        except queue.Empty:
+                            await asyncio.sleep(0.01)
+
+                    # Put chunks back so PHASE 2 captures them
+                    for _c in _sniff_chunks:
+                        self.audio_queue.put_nowait(_c)
+
+                    # ── Acknowledge only when no inline question detected ──────
+                    if not _inline_speech:
+                        ack = "Yes? How can I help you?"
+                        print(f"[{self.wakeword_display}] {ack}")
+                        if self.tts is not None:
+                            self.is_speaking = True
+                            self._barge_in_suppress_until = time.time() + BARGE_IN_GRACE_SECONDS
+                            asyncio.create_task(self._play_tts(ack))
+                    else:
+                        print(f"[{self.wakeword_display}] Inline question detected — skipping ack.")
 
                     last_interaction_at = [time.time()]  # List for pass-by-ref
 

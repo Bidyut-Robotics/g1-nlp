@@ -5,6 +5,7 @@ from typing import TypedDict, List, Dict, Any, Awaitable, Callable, Optional
 from core.interfaces import ILLMProvider
 from core.schemas import Utterance, NLPActionPayload, ActionType
 from core.config import load_app_config
+from core.prompt_builder import PromptBuilder
 
 # ─── Week 1 feature flags (set to True to re-enable in Week 2+) ──────────────
 WEEK1_PERSONA_ENABLED = False
@@ -48,6 +49,16 @@ class DialogueManager:
         self.robot_company = ri.get("company", "this company")
         self.robot_location = ri.get("location", "this office")
         self.robot_role = ri.get("role", "office assistant robot")
+
+        self.prompt_builder = PromptBuilder(
+            robot_name=self.robot_name,
+            robot_company=self.robot_company,
+            robot_location=self.robot_location,
+            robot_role=self.robot_role,
+        )
+        # Push a fresh system prompt to the LLM on startup
+        if hasattr(self.llm, "set_system_prompt"):
+            self.llm.set_system_prompt(self.prompt_builder.build_system())
 
     def get_or_create_session(self, session_id: str) -> AgentState:
         if session_id not in self.sessions:
@@ -155,65 +166,46 @@ class DialogueManager:
         return state
 
     def _build_prompt(self, state: AgentState, tool_results: Dict[str, str] = None) -> str:
+        """
+        Builds the user-turn prompt (history + question).
+        System prompt is managed separately via PromptBuilder and pushed to the LLM.
+        To inject context (facial recog, context engine, RAG), update the system prompt:
+            self.llm.set_system_prompt(self.prompt_builder.build_system(context={...}))
+        """
         if tool_results is None:
             tool_results = {}
 
-        # Extract the last user message to give the model explicit focus
+        # Extract last user question
         user_question = ""
         for m in reversed(state["messages"]):
             if m["role"] == "user":
                 user_question = m["content"]
                 break
 
-        # Build conversation history (excluding the last user turn — shown separately)
-        history_lines = []
-        pending_user = True  # skip the last user message from history
+        # History: all messages except the last user turn
+        history = []
+        pending_user = True
         for m in reversed(state["messages"]):
             if pending_user and m["role"] == "user":
                 pending_user = False
                 continue
-            history_lines.insert(0, f"{m['role'].upper()}: {m['content']}")
-        history_str = "\n".join(history_lines) if history_lines else "(new conversation)"
+            history.insert(0, m)
 
-        # Build context section
-        context_parts = []
+        # If context engine or facial recog has new data, rebuild system prompt
+        runtime_context = {}
         if WEEK1_PERSONA_ENABLED:
-            persona = state["context"].get("person_profile", {})
+            persona = state["context"].get("person_profile")
             if persona:
-                context_parts.append(
-                    f"User: {persona.get('name', 'Unknown')} | "
-                    f"Role: {persona.get('role', 'Guest')} | "
-                    f"Pref: {persona.get('pref', 'None')}"
-                )
+                runtime_context["person"] = persona
         if WEEK1_CALENDAR_ENABLED and tool_results.get("calendar"):
-            context_parts.append(f"\n[CALENDAR INFORMATION]\n{tool_results['calendar']}")
+            runtime_context["memory"] = tool_results["calendar"]
 
-        context_block = "\n".join(context_parts) if context_parts else ""
+        if runtime_context and hasattr(self.llm, "set_system_prompt"):
+            self.llm.set_system_prompt(
+                self.prompt_builder.build_system(context=runtime_context)
+            )
 
-        return f"""You are Jarvis, a helpful humanoid robot assistant. Answer questions accurately and concisely.
-
-FACTS ABOUT YOU (always use these, never contradict them):
-- Your name is {self.robot_name}
-- You were built by {self.robot_company}
-- You are deployed at: {self.robot_location}
-- Your role: {self.robot_role}
-
-RULES:
-- Answer the CURRENT QUESTION directly. Do not repeat greetings.
-- Give a specific, factual answer in 1-3 sentences.
-- Do not start with "Hello", "Hi", "Certainly", "Of course", or filler phrases.
-- Do not make up facts, distances, place names, or technical specifications.
-- If uncertain, say 'I'm not sure about that' or 'I don't have that information'.
-- Speak naturally, as if talking to a person face-to-face.
-
-
-{context_block}
-CONVERSATION HISTORY:
-{history_str}
-
-CURRENT QUESTION: {user_question}
-
-ANSWER:"""
+        return self.prompt_builder.build_user_turn(user_question, history)
 
 
 
@@ -302,11 +294,24 @@ ANSWER:"""
         keywords = ["move", "go to", "navigate", "escort", "take me", "lead me", "bring me"]
         return any(keyword in lowered for keyword in keywords)
 
+    _DEFINITION_PREFIXES = (
+        "what is the meaning of", "what does", "mean", "explain", "define",
+        "definition of", "what is a", "tell me about", "what is the",
+    )
+
+    def _is_definition_question(self, lowered: str) -> bool:
+        """Return True if the query is asking for an explanation/meaning, not a command."""
+        return any(p in lowered for p in self._DEFINITION_PREFIXES)
+
     def _is_simple_query(self, text: str) -> bool:
         """
         Detect simple factual queries that bypass the LLM entirely.
         """
         lowered = re.sub(r'[^\w\s]', '', text.lower()).strip()
+
+        # If it's a definition/explanation question, always route to LLM
+        if self._is_definition_question(lowered):
+            return False
 
         fast_patterns = [
             # Time
