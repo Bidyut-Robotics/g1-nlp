@@ -6,6 +6,7 @@ from core.interfaces import ILLMProvider
 from core.schemas import Utterance, NLPActionPayload, ActionType
 from core.config import load_app_config
 from core.prompt_builder import PromptBuilder
+from services.knowledge.kb_client import kb_client
 
 # ─── Week 1 feature flags (set to True to re-enable in Week 2+) ──────────────
 WEEK1_PERSONA_ENABLED = False
@@ -129,6 +130,13 @@ class DialogueManager:
             except Exception as e:
                 print(f"[SYSTEM] Calendar lookup failed: {e}")
         
+        # 4b. Knowledge base lookup (non-blocking, 500ms max)
+        kb_docs = await kb_client.retrieve(utterance.text)
+        if kb_docs:
+            state["context"]["_kb_memory"] = "\n\n---\n\n".join(kb_docs)
+        else:
+            state["context"].pop("_kb_memory", None)
+
         # 5. SINGLE LLM PASS: Build prompt with all context + tool results injected upfront
         prompt = self._build_prompt(state, tool_results)
         response_content = await self._stream_response(
@@ -191,7 +199,7 @@ class DialogueManager:
                 continue
             history.insert(0, m)
 
-        # If context engine or facial recog has new data, rebuild system prompt
+        # Rebuild system prompt with any runtime context (KB, persona, calendar)
         runtime_context = {}
         if WEEK1_PERSONA_ENABLED:
             persona = state["context"].get("person_profile")
@@ -199,6 +207,11 @@ class DialogueManager:
                 runtime_context["person"] = persona
         if WEEK1_CALENDAR_ENABLED and tool_results.get("calendar"):
             runtime_context["memory"] = tool_results["calendar"]
+
+        # Knowledge base chunks take priority over calendar for memory slot
+        kb_memory = state["context"].get("_kb_memory")
+        if kb_memory:
+            runtime_context["memory"] = kb_memory
 
         if runtime_context and hasattr(self.llm, "set_system_prompt"):
             self.llm.set_system_prompt(

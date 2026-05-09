@@ -61,5 +61,12 @@
     "model": "models/hey_jarvis_v0.1.onnx",
     "display_name": "Jarvis",
     "threshold": 0.15
+  },
+
+  "knowledge_base": {
+    "enabled": true,
+    "url": "http://localhost:8000",
+    "top_k": 3,
+    "timeout_ms": 500
   }
 }
