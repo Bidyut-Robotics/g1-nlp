@@ -1,6 +1,7 @@
 """Knowledge base client — queries g1_nlp_dashboard for relevant document chunks."""
 
 import asyncio
+import re
 from typing import List
 
 import aiohttp
@@ -10,6 +11,30 @@ from core.config import load_app_config
 
 def _load_cfg() -> dict:
     return load_app_config().get("knowledge_base", {})
+
+
+# Queries that never need KB lookup — greetings, acks, simple commands
+_SKIP_PATTERNS = re.compile(
+    r"^(hi|hello|hey|good morning|good afternoon|good evening|"
+    r"thank(s| you( very much)?)?|bye|goodbye|ok(ay)?|"
+    r"yes|no|stop|cancel|got it|alright|"
+    r"what time|what date|what day|who are you|what are you|"
+    r"what can you do|where are you|move forward|move backward|"
+    r"shake hand|handshake)[.!?]?$",
+    re.IGNORECASE,
+)
+
+
+def _clean_query(text: str) -> str:
+    """
+    Keep only the first sentence of the ASR transcript for KB lookup.
+    Whisper often appends hallucinated repetitions after the real utterance;
+    the first sentence is almost always the genuine question.
+    """
+    # Split on sentence-ending punctuation, take the first non-empty chunk
+    sentences = re.split(r"[.!?]", text)
+    first = sentences[0].strip() if sentences else text
+    return first if first else text
 
 
 class KBClient:
@@ -31,8 +56,13 @@ class KBClient:
         if not self.enabled:
             return []
 
+        # Skip KB for trivial utterances that will never need document context
+        clean = _clean_query(query)
+        if _SKIP_PATTERNS.match(clean.strip()):
+            return []
+
         url = f"{self.base_url}/api/v1/retrieve/"
-        payload = {"query": query, "top_k": top_k or self.top_k}
+        payload = {"query": clean, "top_k": top_k or self.top_k}
 
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout_s)
