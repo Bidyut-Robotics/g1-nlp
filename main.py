@@ -571,7 +571,13 @@ class LiveAudioPipeline:
                 BARGE_IN_MIN_MIC_ENERGY,
             )
             if mic_energy >= dynamic_threshold:
-                consecutive_above += 1
+                # Silero confirmation: energy gate passed, now verify it's actual
+                # human speech (not HVAC, motors, or distant background noise).
+                # Falls back to energy-only if Silero model failed to load.
+                if self._vad_is_speech(chunk):
+                    consecutive_above += 1
+                else:
+                    consecutive_above = 0
             else:
                 consecutive_above = 0
 
@@ -699,6 +705,7 @@ class LiveAudioPipeline:
             "silence_start_time": None,
             "last_debug_at": 0.0,
             "waiting_for_ack": False,
+            "from_barge_in": False,
         }
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -843,9 +850,11 @@ class LiveAudioPipeline:
                     continue
 
             # Clear the barge-in flag on first valid chunk so the next turn
-            # is treated as normal.
+            # is treated as normal. Stamp turn so PHASE 3 can relax the
+            # min-speech check for short commands like "stop"/"wait".
             if self._barge_in_active:
                 self._barge_in_active = False
+                turn["from_barge_in"] = True
                 echo_drained = True  # barge-in handler already settled
 
             # ── Process the chunk ─────────────────────────────────────────────
@@ -1032,7 +1041,10 @@ class LiveAudioPipeline:
                             break
 
                         # ── PHASE 3 — Validate: enough speech? ───────────────
-                        if turn["speech_chunk_count"] < MIN_SPEECH_CHUNKS:
+                        # After barge-in, short commands ("stop", "wait") may
+                        # produce only 1-2 chunks — skip the floor check so they
+                        # reach ASR. Normal turns still require MIN_SPEECH_CHUNKS.
+                        if not turn["from_barge_in"] and turn["speech_chunk_count"] < MIN_SPEECH_CHUNKS:
                             self._debug(
                                 f"Not enough speech ({turn['speech_chunk_count']} chunks) "
                                 f"— looping silently"
