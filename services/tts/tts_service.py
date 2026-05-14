@@ -224,6 +224,7 @@ class G1BridgeTTS(ITTSProvider):
 
         print(f"[TTS:BRIDGE] Streaming: '{text}'")
         try:
+            last_chunk_duration = 0.0
             async for pcm_chunk in self.piper.speak(text):
                 samples = np.frombuffer(pcm_chunk, dtype=np.int16)
 
@@ -244,8 +245,14 @@ class G1BridgeTTS(ITTSProvider):
                 await asyncio.to_thread(sock.sendall, header + data)
 
                 chunk_duration = len(samples) / target_fs
+                last_chunk_duration = chunk_duration
                 await asyncio.sleep(chunk_duration * 0.95)
                 yield data
+
+            # Wait for the robot's audio buffer to drain before signalling end-of-speech.
+            # Without this the sentinel arrives while the last word is still playing,
+            # causing it to be cut off mid-syllable.
+            await asyncio.sleep(last_chunk_duration * 0.05 + 0.30)
 
             # end-of-speech sentinel
             await asyncio.to_thread(sock.sendall, struct.pack('<I', 0))

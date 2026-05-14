@@ -145,4 +145,10 @@ RULES:
         """Filled by RAG / knowledge retrieval."""
         if not memory:
             return ""
-        return f"RETRIEVED KNOWLEDGE:\n{memory}"
+        return (
+            "RETRIEVED KNOWLEDGE (authoritative source — use this to answer):\n"
+            f"{memory}\n\n"
+            "RULE: If the answer appears anywhere in the RETRIEVED KNOWLEDGE above, state it directly "
+            "with the exact figure, name, or fact. Do NOT say information is unavailable if it is present above. "
+            "Do NOT use your training knowledge when retrieved knowledge is provided."
+        )
