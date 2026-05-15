@@ -952,7 +952,17 @@ class LiveAudioPipeline:
                             )
                             last_debug_at = now
 
-                        if self.wakeword_detector.should_run(energy, SPEECH_START_THRESHOLD):
+                        if self.wakeword_detector.should_run(energy):
+                            # Drain any backlogged chunks into buffer before transcribing
+                            # so whisper always sees the most recent audio, not stale frames
+                            while True:
+                                try:
+                                    _c = self.audio_queue.get_nowait()
+                                    self._ww_buffer.append(_c)
+                                    self.preroll_chunks.append(_c)
+                                except queue.Empty:
+                                    break
+
                             detected = await self.wakeword_detector.detect_async(
                                 list(self._ww_buffer)
                             )

@@ -18,9 +18,10 @@ from typing import List
 import numpy as np
 
 SAMPLE_RATE = 16000
-BUFFER_SECONDS = 2.0          # rolling window fed to whisper
-RUN_INTERVAL = 0.5            # min seconds between whisper calls
-MIN_BUFFER_SECONDS = 0.6      # don't run whisper until we have this much audio
+BUFFER_SECONDS = 2.5          # rolling window fed to whisper
+RUN_INTERVAL = 1.0            # min seconds between whisper calls
+MIN_BUFFER_SECONDS = 0.8      # don't run whisper until we have this much audio
+ENERGY_THRESHOLD = 0.04       # minimum energy to trigger a whisper run (higher than speech gate)
 
 
 class WhisperWakeWord:
@@ -67,7 +68,7 @@ class WhisperWakeWord:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def should_run(self, energy: float, energy_threshold: float) -> bool:
+    def should_run(self, energy: float, energy_threshold: float = ENERGY_THRESHOLD) -> bool:
         """Return True when it's time to run a transcription check."""
         now = time.time()
         return (
@@ -118,7 +119,21 @@ class WhisperWakeWord:
         if text:
             print(f"[WAKEWORD] heard: '{text}'")
 
-        return bool(self._pattern.search(text))
+        return self._keyword_match(text)
+
+    def _keyword_match(self, text: str) -> bool:
+        """Exact pattern match OR fuzzy edit-distance match for accent/ASR errors."""
+        if not text:
+            return False
+        if self._pattern.search(text):
+            return True
+        # Fuzzy: any word within edit distance 2 of keyword catches
+        # "javi", "jadvi", "jarv", etc.
+        for word in re.findall(r'\b\w+\b', text.lower()):
+            if len(word) >= 3 and _edit_distance(word, self.keyword) <= 2:
+                print(f"[WAKEWORD] fuzzy match: '{word}' ≈ '{self.keyword}'")
+                return True
+        return False
 
     async def detect_async(self, chunks: List[np.ndarray]) -> bool:
         """Non-blocking version — runs transcription in a thread."""
@@ -126,6 +141,21 @@ class WhisperWakeWord:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _edit_distance(a: str, b: str) -> int:
+    """Levenshtein distance between two strings."""
+    if len(a) < len(b):
+        return _edit_distance(b, a)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for ca in a:
+        curr = [prev[0] + 1]
+        for j, cb in enumerate(b):
+            curr.append(min(prev[j + 1] + 1, curr[-1] + 1, prev[j] + (ca != cb)))
+        prev = curr
+    return prev[-1]
+
 
 def _to_float32(chunks: List[np.ndarray]) -> np.ndarray:
     """Concatenate int16 chunks and normalise to float32 [-1, 1]."""
