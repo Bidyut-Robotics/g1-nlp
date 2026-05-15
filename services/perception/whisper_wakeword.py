@@ -39,11 +39,31 @@ class WhisperWakeWord:
             rf"\b{re.escape(self.keyword)}\w*", re.IGNORECASE
         )
 
-        print(f"[WAKEWORD] Loading faster-whisper '{model_size}' on {device}...")
-        from faster_whisper import WhisperModel
-        self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        self._model = None
+        self._backend = None
         self._last_run: float = 0.0
-        print(f"[WAKEWORD] Ready — keyword='{self.keyword}'")
+
+        # Try faster-whisper on GPU → CPU → openai-whisper fallback
+        for _device, _ctype in [(device, compute_type), ("cpu", "float32")]:
+            try:
+                print(f"[WAKEWORD] Loading faster-whisper '{model_size}' on {_device}...")
+                from faster_whisper import WhisperModel
+                self._model = WhisperModel(model_size, device=_device, compute_type=_ctype)
+                self._backend = "faster-whisper"
+                print(f"[WAKEWORD] Ready (faster-whisper/{_device}) — keyword='{self.keyword}'")
+                break
+            except Exception as e:
+                print(f"[WAKEWORD] faster-whisper/{_device} failed: {e}")
+
+        if self._model is None:
+            try:
+                print(f"[WAKEWORD] Trying openai-whisper '{model_size}' on {device}...")
+                import whisper as _ow
+                self._model = _ow.load_model(model_size.replace(".en", ""), device=device)
+                self._backend = "whisper"
+                print(f"[WAKEWORD] Ready (openai-whisper/{device}) — keyword='{self.keyword}'")
+            except Exception as e:
+                raise RuntimeError(f"No whisper backend available for wake word: {e}")
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -71,15 +91,26 @@ class WhisperWakeWord:
 
         audio = _to_float32(chunks)
         try:
-            segments, _ = self._model.transcribe(
-                audio,
-                beam_size=1,
-                best_of=1,
-                language="en",
-                condition_on_previous_text=False,
-                vad_filter=False,   # we gate externally via energy
-            )
-            text = " ".join(seg.text for seg in segments).strip()
+            if self._backend == "faster-whisper":
+                segments, _ = self._model.transcribe(
+                    audio,
+                    beam_size=1,
+                    best_of=1,
+                    language="en",
+                    condition_on_previous_text=False,
+                    vad_filter=False,
+                )
+                text = " ".join(seg.text for seg in segments).strip()
+            else:
+                import whisper as _ow
+                result = self._model.transcribe(
+                    audio,
+                    beam_size=1,
+                    language="en",
+                    condition_on_previous_text=False,
+                    fp16=(str(self._model.device) == "cuda"),
+                )
+                text = result["text"].strip()
         except Exception as e:
             print(f"[WAKEWORD] Transcription error: {e}")
             return False
