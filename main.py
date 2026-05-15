@@ -34,7 +34,7 @@ from typing import Optional
 import numpy as np
 import sounddevice as sd
 import torch
-from openwakeword.model import Model
+from services.perception.whisper_wakeword import WhisperWakeWord, make_rolling_buffer
 
 from core.config import get_tts_config, get_hardware_config, load_app_config
 from core.factory import ServiceFactory
@@ -268,35 +268,23 @@ class LiveAudioPipeline:
 
         print(f"[HARDWARE] mode={self.hardware_mode.upper()}, mic_device={self.device or 'system default'}")
 
-        # ── Wake-word model ───────────────────────────────────────────────────
-        self.wakeword_name = os.getenv("WAKEWORD_MODEL", ww_cfg.get("model", "hey_jarvis_v0.1"))
-        self.wakeword_key = pathlib.Path(self.wakeword_name).stem.replace(" ", "_")
+        # ── Wake-word model (faster-whisper) ─────────────────────────────────
+        self.wakeword_display = os.getenv("WAKEWORD_DISPLAY", ww_cfg.get("display_name", "Jarvis"))
+        _keyword = self.wakeword_display.lower()
+        _asr_cfg = app_cfg.get("asr", {})
 
         try:
-            if "/" in self.wakeword_name or self.wakeword_name.endswith(".onnx"):
-                model_path = os.path.abspath(self.wakeword_name)
-                print(f"[WAKEWORD] Loading custom model from path: {model_path}")
-                if not os.path.exists(model_path):
-                    raise FileNotFoundError(f"Wake-word model file not found at: {model_path}")
-                model_arg = [model_path]
-            else:
-                print(f"[WAKEWORD] Initialized with standard name: '{self.wakeword_name}'")
-                model_arg = [self.wakeword_name]
-
-            try:
-                # openwakeword >= 0.5 uses wakeword_models
-                self.wakeword_model = Model(wakeword_models=model_arg, inference_framework="onnx")
-            except TypeError:
-                # older versions use wakeword_model_paths
-                self.wakeword_model = Model(wakeword_model_paths=model_arg, inference_framework="onnx")
-
-            print(f"[WAKEWORD] Available keys in model: {list(self.wakeword_model.models.keys())}")
+            self.wakeword_detector = WhisperWakeWord(
+                keyword=_keyword,
+                device=_asr_cfg.get("device", "cuda"),
+                compute_type=_asr_cfg.get("compute_type", "float16"),
+                model_size="tiny.en",
+            )
         except Exception as e:
             print(f"\n[NLP ERROR] Failed to load wake-word model: {e}")
             sys.exit(0)
 
-        self.wakeword_threshold = float(os.getenv("WAKEWORD_THRESHOLD", ww_cfg.get("threshold", "0.5")))
-        self.wakeword_display = os.getenv("WAKEWORD_DISPLAY", ww_cfg.get("display_name", "Jarvis"))
+        self._ww_buffer = make_rolling_buffer(WAKEWORD_BLOCK_SIZE)
 
         # ── Silero VAD ────────────────────────────────────────────────────────
         print("[VAD] Loading Silero VAD...")
@@ -679,8 +667,7 @@ class LiveAudioPipeline:
             f"[BARGE-IN] Prepended {preroll_count} preroll + kept {len(current_frames)} live frames"
         )
 
-        # 8. Reset wakeword model and interrupt flag
-        self.wakeword_model.reset()
+        # 8. Clear interrupt flag
         self.interrupt_event.clear()
 
         # 9. Clear conversation history so LLM answers the new question fresh
@@ -945,6 +932,7 @@ class LiveAudioPipeline:
                     print("[NLP MODULE] Standby — waiting for wake word...")
                     last_debug_at = 0.0
 
+                    self._ww_buffer.clear()
                     while True:
                         try:
                             chunk = self.audio_queue.get_nowait()
@@ -955,29 +943,24 @@ class LiveAudioPipeline:
                         now = time.time()
                         energy = self._energy(chunk)
                         self.preroll_chunks.append(chunk)
+                        self._ww_buffer.append(chunk)
 
-                        scores = self.wakeword_model.predict(chunk)
-                        score = float(scores.get(
-                            self.wakeword_key,
-                            max(scores.values(), default=0.0)
-                        ))
-
-                        if score >= WAKEWORD_DEBUG_FLOOR:
-                            self._debug(f"Wake score={score:.3f}, energy={energy:.4f}")
-                        elif self.debug_enabled and now - last_debug_at >= DEBUG_LOG_INTERVAL_SECONDS:
+                        if self.debug_enabled and now - last_debug_at >= DEBUG_LOG_INTERVAL_SECONDS:
                             self._debug(
-                                f"Standby: score={score:.3f}, energy={energy:.4f}, "
+                                f"Standby: energy={energy:.4f}, "
                                 f"queue={self.audio_queue.qsize()}"
                             )
                             last_debug_at = now
 
-                        if score >= self.wakeword_threshold:
-                            self._wake_time = time.time()
-                            print(f"[{self.wakeword_display}] Wake word detected ({score:.3f}).")
-                            break
+                        if self.wakeword_detector.should_run(energy, SPEECH_START_THRESHOLD):
+                            detected = await self.wakeword_detector.detect_async(
+                                list(self._ww_buffer)
+                            )
+                            if detected:
+                                self._wake_time = time.time()
+                                print(f"[{self.wakeword_display}] Wake word detected.")
+                                break
 
-                    # Reset wakeword internal sliding window
-                    self.wakeword_model.reset()
                     self.preroll_chunks.clear()
 
                     # ── Sniff for inline question (500ms window) ──────────────
@@ -1081,14 +1064,11 @@ class LiveAudioPipeline:
                                 # _handle_barge_in reset state; go straight to PHASE 2
                                 continue
 
-                        # Normal completion: reset wakeword (queues drained
-                        # naturally by next capture's saw_is_speaking logic)
-                        self.wakeword_model.reset()
+                        pass  # no wakeword state to reset
 
                     # End of conversational loop — cleanup before PHASE 1
                     self._drain_audio_queue()
                     self._drain_barge_in_queue()
-                    self.wakeword_model.reset()
                     self.preroll_chunks.clear()
                     self._barge_in_active = False
 
