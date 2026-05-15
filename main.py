@@ -34,7 +34,6 @@ from typing import Optional
 import numpy as np
 import sounddevice as sd
 import torch
-from services.perception.whisper_wakeword import WhisperWakeWord, make_rolling_buffer
 
 from core.config import get_tts_config, get_hardware_config, load_app_config
 from core.factory import ServiceFactory
@@ -268,23 +267,12 @@ class LiveAudioPipeline:
 
         print(f"[HARDWARE] mode={self.hardware_mode.upper()}, mic_device={self.device or 'system default'}")
 
-        # ── Wake-word model (faster-whisper) ─────────────────────────────────
+        # ── Wake-word detection (VAD-gated ASR) ──────────────────────────────
+        # Uses Silero VAD to detect speech onset, then runs the existing medium
+        # Whisper ASR model to transcribe — no extra model or account needed.
         self.wakeword_display = os.getenv("WAKEWORD_DISPLAY", ww_cfg.get("display_name", "Jarvis"))
-        _keyword = self.wakeword_display.lower()
-        _asr_cfg = app_cfg.get("asr", {})
-
-        try:
-            self.wakeword_detector = WhisperWakeWord(
-                keyword=_keyword,
-                device=_asr_cfg.get("device", "cuda"),
-                compute_type=_asr_cfg.get("compute_type", "float16"),
-                model_size="tiny.en",
-            )
-        except Exception as e:
-            print(f"\n[NLP ERROR] Failed to load wake-word model: {e}")
-            sys.exit(0)
-
-        self._ww_buffer = make_rolling_buffer(WAKEWORD_BLOCK_SIZE)
+        self.wakeword_keyword = ww_cfg.get("keyword", self.wakeword_display.lower())
+        print(f"[WAKEWORD] VAD+ASR mode — keyword='{self.wakeword_keyword}'")
 
         # ── Silero VAD ────────────────────────────────────────────────────────
         print("[VAD] Loading Silero VAD...")
@@ -380,6 +368,16 @@ class LiveAudioPipeline:
                 self._barge_in_queue.get_nowait()
             except queue.Empty:
                 return
+
+    async def _wakeword_check(self, chunks: list) -> bool:
+        """Transcribe buffered chunks and check for wake keyword."""
+        import re
+        audio = np.concatenate(chunks).astype(np.float32) / 32768.0
+        utterance = await asyncio.to_thread(self.asr.transcribe_sync, audio)
+        text = utterance.text.strip().lower()
+        if text:
+            print(f"[WAKEWORD] heard: '{text}'")
+        return bool(re.search(rf"\b{re.escape(self.wakeword_keyword)}", text))
 
     def _energy(self, chunk: np.ndarray) -> float:
         float_chunk = chunk.astype(np.float32) / 32768.0
@@ -932,7 +930,13 @@ class LiveAudioPipeline:
                     print("[NLP MODULE] Standby — waiting for wake word...")
                     last_debug_at = 0.0
 
-                    self._ww_buffer.clear()
+                    # VAD-gated wake word detection:
+                    # Silero VAD detects speech → buffer chunks → ASR → keyword check
+                    _ww_buf = []          # speech chunks accumulated this utterance
+                    _silence_count = 0    # consecutive non-speech chunks after speech
+                    _WW_SILENCE_GATE = 8  # ~640ms silence → run ASR
+                    _WW_MAX_CHUNKS = int(2.5 * WAKEWORD_SAMPLE_RATE / WAKEWORD_BLOCK_SIZE)
+
                     while True:
                         try:
                             chunk = self.audio_queue.get_nowait()
@@ -943,7 +947,6 @@ class LiveAudioPipeline:
                         now = time.time()
                         energy = self._energy(chunk)
                         self.preroll_chunks.append(chunk)
-                        self._ww_buffer.append(chunk)
 
                         if self.debug_enabled and now - last_debug_at >= DEBUG_LOG_INTERVAL_SECONDS:
                             self._debug(
@@ -952,24 +955,29 @@ class LiveAudioPipeline:
                             )
                             last_debug_at = now
 
-                        if self.wakeword_detector.should_run(energy):
-                            # Drain any backlogged chunks into buffer before transcribing
-                            # so whisper always sees the most recent audio, not stale frames
-                            while True:
-                                try:
-                                    _c = self.audio_queue.get_nowait()
-                                    self._ww_buffer.append(_c)
-                                    self.preroll_chunks.append(_c)
-                                except queue.Empty:
-                                    break
+                        is_speech = self._vad_is_speech(chunk)
 
-                            detected = await self.wakeword_detector.detect_async(
-                                list(self._ww_buffer)
-                            )
-                            if detected:
+                        if is_speech:
+                            _ww_buf.append(chunk)
+                            _silence_count = 0
+                        elif _ww_buf:
+                            # We have buffered speech — count silence
+                            _ww_buf.append(chunk)
+                            _silence_count += 1
+
+                        # Run ASR when silence follows speech or buffer is full
+                        run_asr = (
+                            _ww_buf and _silence_count >= _WW_SILENCE_GATE
+                        ) or (len(_ww_buf) >= _WW_MAX_CHUNKS)
+
+                        if run_asr:
+                            if await self._wakeword_check(_ww_buf):
                                 self._wake_time = time.time()
                                 print(f"[{self.wakeword_display}] Wake word detected.")
                                 break
+                            # Not the keyword — reset and keep listening
+                            _ww_buf.clear()
+                            _silence_count = 0
 
                     self.preroll_chunks.clear()
 

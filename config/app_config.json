@@ -58,9 +58,8 @@
   },
 
   "wake_word": {
-    "model": "models/hey_jarvis_v0.1.onnx",
-    "display_name": "Jarvis",
-    "threshold": 0.25
+    "keyword": "jarvis",
+    "display_name": "Jarvis"
   },
 
   "knowledge_base": {
