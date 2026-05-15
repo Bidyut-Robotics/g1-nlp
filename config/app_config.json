@@ -62,7 +62,7 @@
     "display_name": "Jarvis",
     "threshold": 0.25
   },
-Ask questions with hybrid retrieval
+
   "knowledge_base": {
     "enabled": true,
     "url": "http://localhost:8000",
