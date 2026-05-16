@@ -60,7 +60,7 @@
   "wake_word": {
     "model": "models/hey_jarvis_v0.1.onnx",
     "display_name": "Jarvis",
-    "threshold": 0.15
+    "threshold": 0.35
   },
 
   "knowledge_base": {

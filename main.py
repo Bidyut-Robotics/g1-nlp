@@ -935,6 +935,7 @@ class LiveAudioPipeline:
                     # ════════════════════════════════════════════════════════
                     print("[NLP MODULE] Standby — waiting for wake word...")
                     last_debug_at = 0.0
+                    _ww_consec = 0     # consecutive frames above threshold
 
                     while True:
                         try:
@@ -947,6 +948,7 @@ class LiveAudioPipeline:
                         energy = self._energy(chunk)
                         self.preroll_chunks.append(chunk)
 
+                        # Always feed every frame — OWW needs continuous audio for its sliding window
                         scores = self.wakeword_model.predict(chunk)
                         score = float(scores.get(
                             self.wakeword_key,
@@ -962,7 +964,17 @@ class LiveAudioPipeline:
                             )
                             last_debug_at = now
 
+                        # Gate threshold check on energy — suppresses false positives in silence
+                        if energy < SPEECH_START_THRESHOLD:
+                            _ww_consec = 0
+                            continue
+
                         if score >= self.wakeword_threshold:
+                            _ww_consec += 1
+                        else:
+                            _ww_consec = 0
+
+                        if _ww_consec >= 2:
                             self._wake_time = time.time()
                             print(f"[{self.wakeword_display}] Wake word detected ({score:.3f}).")
                             break
