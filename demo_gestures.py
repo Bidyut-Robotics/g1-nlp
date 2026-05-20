@@ -191,18 +191,25 @@ def do_hand_wave():
     time.sleep(3.0)
 
 COMMANDS = {
-    "handshake": (do_handshake, "Extend your hand for handshake"),
-    "hand shake": (do_handshake, "Extend your hand for handshake"),
-    "shake":     (do_handshake, "Extend your hand for handshake"),
-    "give hand shake":  (do_handshake, "Extend your hand for handshake"),
-    "give handshake":  (do_handshake, "Extend your hand for handshake"),
-    "give me hand shake":     (do_handshake, "Extend your hand for handshake"),
-    "give me handshake":     (do_handshake, "Extend your hand for handshake"),
-    "forward":   (do_forward,   "Moving forward"),
-    "move forward":   (do_forward,   "Moving forward"),
-    "backward":  (do_backward,  "Moving backward"),
-    "move backward":  (do_backward,  "Moving backward"),
-    "wave hand":  (do_hand_wave,  "waving hand"),
+    "handshake":          (do_handshake, "Extend your hand for handshake"),
+    "hand shake":         (do_handshake, "Extend your hand for handshake"),
+    "shake":              (do_handshake, "Extend your hand for handshake"),
+    "give hand shake":    (do_handshake, "Extend your hand for handshake"),
+    "give handshake":     (do_handshake, "Extend your hand for handshake"),
+    "give me hand shake": (do_handshake, "Extend your hand for handshake"),
+    "give me handshake":  (do_handshake, "Extend your hand for handshake"),
+    "forward":            (do_forward,   "Moving forward"),
+    "move forward":       (do_forward,   "Moving forward"),
+    "backward":           (do_backward,  "Moving backward"),
+    "move backward":      (do_backward,  "Moving backward"),
+    "wave hand":          (do_hand_wave, "Sure, waving hand!"),
+    "hand wave":          (do_hand_wave, "Sure, waving hand!"),
+    "wave":               (do_hand_wave, "Sure, waving hand!"),
+    "hi":                 (do_hand_wave, "Hello! Nice to meet you."),
+    "hello":              (do_hand_wave, "Hello! Nice to meet you."),
+    "bye":                (do_hand_wave, "Goodbye! See you soon."),
+    "good bye":           (do_hand_wave, "Goodbye! See you soon."),
+    "goodbye":            (do_hand_wave, "Goodbye! See you soon."),
 }
 
 def dispatch(transcript: str) -> bool:
