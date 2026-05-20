@@ -159,7 +159,7 @@ print("[DEMO] Wake word ready.")
 # ── ASR model ─────────────────────────────────────────────────────────────────
 from faster_whisper import WhisperModel
 print("[DEMO] Loading Whisper tiny (CPU) ...")
-asr = WhisperModel("tiny.en", device="cpu", compute_type="int8")
+asr = WhisperModel("small.en", device="cpu", compute_type="int8")
 print("[DEMO] ASR ready.")
 
 # ── TTS ───────────────────────────────────────────────────────────────────────
@@ -186,11 +186,23 @@ def do_backward():
     time.sleep(MOVE_DURATION)
     loco.Move(0, 0, 0)
 
+def do_hand_wave():
+    loco.WaveHand()   # LocoClient built-in wave
+    time.sleep(3.0)
+
 COMMANDS = {
     "handshake": (do_handshake, "Extend your hand for handshake"),
+    "hand shake": (do_handshake, "Extend your hand for handshake"),
     "shake":     (do_handshake, "Extend your hand for handshake"),
+    "give hand shake":  (do_handshake, "Extend your hand for handshake"),
+    "give handshake":  (do_handshake, "Extend your hand for handshake"),
+    "give me hand shake":     (do_handshake, "Extend your hand for handshake"),
+    "give me handshake":     (do_handshake, "Extend your hand for handshake"),
     "forward":   (do_forward,   "Moving forward"),
+    "move forward":   (do_forward,   "Moving forward"),
     "backward":  (do_backward,  "Moving backward"),
+    "move backward":  (do_backward,  "Moving backward"),
+    "wave hand":  (do_hand_wave,  "waving hand"),
 }
 
 def dispatch(transcript: str) -> bool:
