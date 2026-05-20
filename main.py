@@ -859,9 +859,8 @@ class LiveAudioPipeline:
                 )
                 turn["last_debug_at"] = now
 
-            # ── VAD: use Silero if available, else energy ─────────────────────
-            # For speed during capture we use energy; Silero ran in barge-in path
-            is_speech = energy >= SPEECH_START_THRESHOLD
+            # ── VAD: Silero if available, else energy ─────────────────────────
+            is_speech = self._vad_is_speech(chunk)
 
             if is_speech:
                 turn["speech_detected"] = True
@@ -964,12 +963,6 @@ class LiveAudioPipeline:
                             )
                             last_debug_at = now
 
-                        # Gate threshold check on energy — suppresses false positives in silence
-                        # Do NOT reset _ww_consec here: energy naturally dips between phonemes
-                        # and resetting breaks consecutive-frame detection.
-                        if energy < SPEECH_START_THRESHOLD:
-                            continue
-
                         if score >= self.wakeword_threshold:
                             _ww_consec += 1
                         else:
@@ -996,7 +989,7 @@ class LiveAudioPipeline:
                         try:
                             _c = self.audio_queue.get_nowait()
                             _sniff_chunks.append(_c)
-                            if self._energy(_c) > SPEECH_START_THRESHOLD:
+                            if self._vad_is_speech(_c):
                                 _inline_speech = True
                         except queue.Empty:
                             await asyncio.sleep(0.01)
