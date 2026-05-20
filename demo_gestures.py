@@ -5,25 +5,29 @@ demo_gestures.py — Standalone voice-command demo for G1 robot.
 Runs entirely on the robot's onboard computer. No AGX, no Ollama, no LLM.
 
 Usage:
-    python3 demo_gestures.py <network_interface>
-    python3 demo_gestures.py enP2p1s0
+    python3 demo_gestures.py [network_interface]
+    python3 demo_gestures.py eth0
 
 Wake word : "Hey Jarvis"
 Commands  : "handshake"    → shake hand + speak
             "move forward" → walk forward + speak
             "move backward"→ walk backward + speak
 
-Requirements (robot onboard):
-    pip install openwakeword faster-whisper numpy
-    unitree_sdk2py must be installed (already on robot)
+Requirements:
+    pip install openwakeword faster-whisper sounddevice numpy
+    unitree_sdk2py must be installed
 """
 
-import sys
-import time
+import json
+import signal
 import socket
 import struct
+import subprocess
+import sys
 import threading
+import time
 import queue
+
 import numpy as np
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -34,17 +38,36 @@ OWW_CHUNK         = 1280        # OpenWakeWord: 80 ms at 16 kHz
 SAMPLE_RATE       = 16000
 WW_THRESHOLD      = 0.5
 WW_KEY            = "hey_jarvis"
-RECORD_SECONDS    = 4.0         # listen window after wake word
-MOVE_DURATION     = 2.0         # seconds to walk before stopping
+RECORD_SECONDS    = 4.0
+MOVE_DURATION     = 2.0
+
+API_SET_MODE      = 1008        # Unitree voice service: mic control
+
+
+def get_local_ip(interface: str) -> str:
+    try:
+        out = subprocess.check_output(["ip", "-4", "addr", "show", interface], text=True)
+        for line in out.splitlines():
+            if "inet " in line:
+                return line.strip().split()[1].split("/")[0]
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
+LOCAL_IP = get_local_ip(NETWORK_INTERFACE)
+print(f"[DEMO] Interface={NETWORK_INTERFACE}, local_ip={LOCAL_IP}")
 
 # ── DDS / SDK init ────────────────────────────────────────────────────────────
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
 from unitree_sdk2py.g1.arm.g1_arm_action_client import G1ArmActionClient, action_map
 from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
+from unitree_sdk2py.rpc.client import Client
 
 print(f"[DEMO] Initializing DDS on {NETWORK_INTERFACE} ...")
 ChannelFactoryInitialize(0, NETWORK_INTERFACE)
+time.sleep(0.5)
 
 loco = LocoClient()
 loco.SetTimeout(10.0)
@@ -57,12 +80,33 @@ arm.Init()
 audio_client = AudioClient()
 audio_client.Init()
 audio_client.SetVolume(100)
-print("[DEMO] DDS ready.")
+
+# ── Mic activation ────────────────────────────────────────────────────────────
+voice_client = Client("voice", False)
+voice_client.SetTimeout(5.0)
+voice_client._SetApiVerson("1.0.0.0")
+voice_client._RegistApi(API_SET_MODE, 0)
+
+def mic_set_mode(mode: int):
+    code, _ = voice_client._Call(API_SET_MODE, json.dumps({"mode": mode}))
+    return code
+
+print("[DEMO] Activating microphone ...")
+code = mic_set_mode(1)   # 1 = active
+if code != 0:
+    print(f"[DEMO] Warning: mic activation returned code={code}")
+else:
+    print("[DEMO] Microphone active.")
+
+def _cleanup(sig=None, frame=None):
+    print("\n[DEMO] Shutting down — deactivating mic ...")
+    mic_set_mode(2)   # 2 = idle
+    sys.exit(0)
+
+signal.signal(signal.SIGINT,  _cleanup)
+signal.signal(signal.SIGTERM, _cleanup)
 
 # ── Multicast mic receiver ────────────────────────────────────────────────────
-# G1 audio system broadcasts mic at 16 kHz int16 mono, 5120 bytes per packet.
-# We split each packet into 1280-sample chunks that OpenWakeWord expects.
-
 _audio_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=200)
 
 def _mic_thread():
@@ -70,8 +114,16 @@ def _mic_thread():
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
     sock.bind(('', MULTICAST_PORT))
-    mreq = struct.pack("4sl", socket.inet_aton(MULTICAST_GROUP), socket.INADDR_ANY)
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+
+    try:
+        mreq = struct.pack("4s4s", socket.inet_aton(MULTICAST_GROUP),
+                           socket.inet_aton(LOCAL_IP))
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    except Exception as e:
+        print(f"[DEMO] Multicast join failed on {LOCAL_IP}, trying INADDR_ANY: {e}")
+        mreq = struct.pack("4sl", socket.inet_aton(MULTICAST_GROUP), socket.INADDR_ANY)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+
     sock.settimeout(1.0)
     print(f"[DEMO] Mic listening on {MULTICAST_GROUP}:{MULTICAST_PORT}")
 
@@ -110,15 +162,15 @@ print("[DEMO] Loading Whisper tiny (CPU) ...")
 asr = WhisperModel("tiny.en", device="cpu", compute_type="int8")
 print("[DEMO] ASR ready.")
 
-# ── TTS helper ────────────────────────────────────────────────────────────────
-def say(text: str, wait: float = 2.0):
+# ── TTS ───────────────────────────────────────────────────────────────────────
+def say(text: str, wait: float = 2.5):
     print(f"[DEMO] Say: {text}")
     ret = audio_client.TtsMaker(text, 1)
     if ret != 0:
         print(f"[DEMO TTS ERROR] TtsMaker returned {ret}")
     time.sleep(wait)
 
-# ── Gesture actions ───────────────────────────────────────────────────────────
+# ── Gestures ──────────────────────────────────────────────────────────────────
 def do_handshake():
     arm.ExecuteAction(action_map.get("shake hand"))
     time.sleep(2.5)
@@ -134,7 +186,6 @@ def do_backward():
     time.sleep(MOVE_DURATION)
     loco.Move(0, 0, 0)
 
-# keyword → (action, spoken response)
 COMMANDS = {
     "handshake": (do_handshake, "Extend your hand for handshake"),
     "shake":     (do_handshake, "Extend your hand for handshake"),
@@ -162,7 +213,7 @@ def drain_queue():
 print("\n[DEMO] Ready. Say 'Hey Jarvis' to activate.\n")
 
 while True:
-    # ── PHASE 1: wait for wake word ──────────────────────────────────────────
+    # PHASE 1: wait for wake word
     consec = 0
     while True:
         chunk = _audio_q.get()
@@ -179,9 +230,9 @@ while True:
 
     drain_queue()
 
-    # ── PHASE 2: record voice command ────────────────────────────────────────
+    # PHASE 2: record command
     say("Yes?", wait=0.8)
-    print(f"[DEMO] Listening for command ({RECORD_SECONDS}s)...")
+    print(f"[DEMO] Listening for command ({RECORD_SECONDS}s) ...")
     frames = []
     deadline = time.time() + RECORD_SECONDS
     while time.time() < deadline:
