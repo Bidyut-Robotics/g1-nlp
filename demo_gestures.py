@@ -123,31 +123,21 @@ signal.signal(signal.SIGTERM, _cleanup)
 _asr_event  = threading.Event()
 _asr_latest = {"text": "", "ts": 0.0}
 
-def _ros2_cmd() -> str:
-    for d in ["foxy", "humble", "galactic", "iron"]:
-        setup = f"/opt/ros/{d}/setup.bash"
-        if __import__("os").path.isfile(setup):
-            print(f"[DEMO] ROS2 distro: {d}")
-            return f"source {setup} && ros2 topic echo /audio_msg"
-    print("[DEMO] ROS2 setup.bash not found — trying ros2 in PATH")
-    return "ros2 topic echo /audio_msg"
-
-_ASR_CMD = _ros2_cmd()
-
 def _asr_thread():
-    """Parse /audio_msg from ros2 topic echo — works even with truncated output."""
-    while True:
+    """Direct cyclonedds subscriber for rt/audio_msg — no ros2 CLI subprocess."""
+    from cyclonedds.domain import DomainParticipant
+    from cyclonedds.topic import Topic
+    from cyclonedds.sub import DataReader
+    from cyclonedds.core import Listener
+    from cyclonedds.internal import InvalidSample
+    from unitree_sdk2py.idl.std_msgs.msg.dds_ import String_
+
+    def _on_data(reader):
         try:
-            proc = subprocess.Popen(
-                _ASR_CMD, shell=True, executable="/bin/bash",
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, bufsize=1,
-            )
-            for line in proc.stdout:
-                line = line.strip()
-                if not line.startswith("data: "):
+            for sample in reader.take(N=100):
+                if isinstance(sample, InvalidSample):
                     continue
-                m = re.search(r'"text"\s*:\s*"([^"]*)"', line)
+                m = re.search(r'"text"\s*:\s*"([^"]*)"', sample.data)
                 if m:
                     text = m.group(1).strip()
                     if text:
@@ -155,16 +145,20 @@ def _asr_thread():
                         _asr_latest["ts"]   = time.time()
                         _asr_event.set()
                         print(f"[ASR] '{text}'", flush=True)
-            stderr = proc.stderr.read().strip()
-            if stderr:
-                print(f"[ASR subprocess stderr] {stderr[:200]}", flush=True)
-            proc.wait()
         except Exception as e:
-            print(f"[ASR thread error] {e}", flush=True)
-        time.sleep(2)
+            print(f"[ASR read error] {e}", flush=True)
+
+    try:
+        part   = DomainParticipant(0)
+        topic  = Topic(part, "rt/audio_msg", String_)
+        reader = DataReader(part, topic, listener=Listener(on_data_available=_on_data))
+        print("[DEMO] ASR DDS reader ready (rt/audio_msg).")
+        while True:
+            time.sleep(60)
+    except Exception as e:
+        print(f"[ASR init failed] {e}", flush=True)
 
 threading.Thread(target=_asr_thread, daemon=True).start()
-print("[DEMO] Built-in ASR thread started (/audio_msg).")
 
 # ── Multicast mic receiver (for OWW wake word only) ──────────────────────────
 _audio_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=200)
