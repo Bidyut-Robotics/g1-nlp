@@ -187,8 +187,9 @@ def do_backward():
     loco.Move(0, 0, 0)
 
 def do_hand_wave():
-    loco.WaveHand()   # LocoClient built-in wave
+    arm.ExecuteAction(action_map.get("high wave"))
     time.sleep(3.0)
+    arm.ExecuteAction(action_map.get("release arm"))
 
 COMMANDS = {
     "handshake":          (do_handshake, "Extend your hand for handshake"),
