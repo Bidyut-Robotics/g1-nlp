@@ -275,7 +275,11 @@ COMMANDS = {
 }
 
 def dispatch(transcript: str) -> bool:
-    t = re.sub(r"[.,!?'\"]", "", transcript.lower()).strip()
+    # Strip embedded non-ASCII (CJK mixed into English results like 'Goodバイ.' → 'Good.')
+    t = re.sub(r"[^\x00-\x7F]+", "", transcript)
+    t = re.sub(r"[.,!?'\"]", "", t).lower().strip()
+    if not t:
+        return False
     # Forward: keyword inside transcript (exact)
     for keyword, (fn, response) in COMMANDS.items():
         if keyword in t:
