@@ -123,23 +123,24 @@ signal.signal(signal.SIGTERM, _cleanup)
 _asr_event  = threading.Event()
 _asr_latest = {"text": "", "ts": 0.0}
 
-def _find_ros2() -> str:
-    for p in ["/opt/ros/foxy/bin/ros2", "/opt/ros/humble/bin/ros2",
-              "/opt/ros/galactic/bin/ros2", "/opt/ros/noetic/bin/ros2"]:
-        if __import__("os").path.isfile(p):
-            return p
-    return "ros2"  # fallback: hope it's in PATH
+def _ros2_cmd() -> str:
+    for d in ["foxy", "humble", "galactic", "iron"]:
+        setup = f"/opt/ros/{d}/setup.bash"
+        if __import__("os").path.isfile(setup):
+            print(f"[DEMO] ROS2 distro: {d}")
+            return f"source {setup} && ros2 topic echo /audio_msg"
+    print("[DEMO] ROS2 setup.bash not found — trying ros2 in PATH")
+    return "ros2 topic echo /audio_msg"
 
-_ROS2 = _find_ros2()
-print(f"[DEMO] ros2 binary: {_ROS2}")
+_ASR_CMD = _ros2_cmd()
 
 def _asr_thread():
     """Parse /audio_msg from ros2 topic echo — works even with truncated output."""
     while True:
         try:
             proc = subprocess.Popen(
-                [_ROS2, "topic", "echo", "/audio_msg"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                _ASR_CMD, shell=True, executable="/bin/bash",
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, bufsize=1,
             )
             for line in proc.stdout:
@@ -154,6 +155,9 @@ def _asr_thread():
                         _asr_latest["ts"]   = time.time()
                         _asr_event.set()
                         print(f"[ASR] '{text}'", flush=True)
+            stderr = proc.stderr.read().strip()
+            if stderr:
+                print(f"[ASR subprocess stderr] {stderr[:200]}", flush=True)
             proc.wait()
         except Exception as e:
             print(f"[ASR thread error] {e}", flush=True)
