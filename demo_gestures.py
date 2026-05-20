@@ -146,9 +146,13 @@ def _asr_thread():
                 conf = float(info.get("confidence", 0))
                 if not text:
                     continue
-                # Skip Chinese / Japanese / other non-English hallucinations
-                if lang and "en" not in lang.lower():
-                    print(f"[ASR skip] {lang}: '{text}'", flush=True)
+                # Skip non-English: explicit tag says non-English, or no tag but text is CJK
+                if lang:
+                    if "en" not in lang.lower():
+                        print(f"[ASR skip] lang={lang}: '{text}'", flush=True)
+                        continue
+                elif not text.isascii():
+                    print(f"[ASR skip] non-ASCII (no lang): '{text}'", flush=True)
                     continue
                 _asr_latest["text"] = text
                 _asr_latest["ts"]   = time.time()
