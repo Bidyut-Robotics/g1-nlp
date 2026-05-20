@@ -127,7 +127,7 @@ def _on_asr(msg: String_):
     try:
         info = json.loads(msg.data)
         text = info.get("text", "").strip()
-        if text and info.get("is_final", False):
+        if text and info.get("is_final", 1):
             _asr_latest["text"] = text
             _asr_latest["ts"]   = time.time()
             _asr_event.set()
