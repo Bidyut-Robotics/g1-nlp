@@ -178,7 +178,7 @@ time.sleep(0.5)
 # ── Wake word model ───────────────────────────────────────────────────────────
 from openwakeword.model import Model as OWWModel
 print("[DEMO] Loading OpenWakeWord (hey_jarvis) ...")
-oww = OWWModel(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+oww = OWWModel(wakeword_models=["hey_jarvis"], inference_framework="tflite")
 print("[DEMO] Wake word ready.")
 
 # ── TTS ───────────────────────────────────────────────────────────────────────
