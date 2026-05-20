@@ -123,12 +123,22 @@ signal.signal(signal.SIGTERM, _cleanup)
 _asr_event  = threading.Event()
 _asr_latest = {"text": "", "ts": 0.0}
 
+def _find_ros2() -> str:
+    for p in ["/opt/ros/foxy/bin/ros2", "/opt/ros/humble/bin/ros2",
+              "/opt/ros/galactic/bin/ros2", "/opt/ros/noetic/bin/ros2"]:
+        if __import__("os").path.isfile(p):
+            return p
+    return "ros2"  # fallback: hope it's in PATH
+
+_ROS2 = _find_ros2()
+print(f"[DEMO] ros2 binary: {_ROS2}")
+
 def _asr_thread():
     """Parse /audio_msg from ros2 topic echo — works even with truncated output."""
     while True:
         try:
             proc = subprocess.Popen(
-                ["ros2", "topic", "echo", "/audio_msg"],
+                [_ROS2, "topic", "echo", "/audio_msg"],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 text=True, bufsize=1,
             )
