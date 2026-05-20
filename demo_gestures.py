@@ -119,10 +119,16 @@ def _cleanup(sig=None, frame=None):
 signal.signal(signal.SIGINT,  _cleanup)
 signal.signal(signal.SIGTERM, _cleanup)
 
-# ── Whisper ASR (GPU) ─────────────────────────────────────────────────────────
-from faster_whisper import WhisperModel
-print("[DEMO] Loading Whisper medium on CUDA ...")
-asr = WhisperModel("medium.en", device="cuda", compute_type="float16")
+# ── Whisper ASR (HuggingFace transformers, GPU) ───────────────────────────────
+import torch
+from transformers import pipeline as hf_pipeline
+print("[DEMO] Loading whisper-large-v3-turbo on CUDA ...")
+asr = hf_pipeline(
+    "automatic-speech-recognition",
+    model="openai/whisper-large-v3-turbo",
+    dtype=torch.float16,
+    device="cuda:0",
+)
 print("[DEMO] ASR ready.")
 
 # ── Multicast mic receiver (for OWW wake word only) ──────────────────────────
@@ -308,8 +314,9 @@ while True:
         transcript = ""
     else:
         audio_np = np.concatenate(frames).astype(np.float32) / 32768.0
-        segments, _ = asr.transcribe(audio_np, language="en", beam_size=3)
-        transcript = " ".join(seg.text for seg in segments).strip()
+        result = asr({"raw": audio_np, "sampling_rate": SAMPLE_RATE},
+                     generate_kwargs={"language": "english", "task": "transcribe"})
+        transcript = result["text"].strip()
 
     print(f"[DEMO] Heard: '{transcript}'")
 
