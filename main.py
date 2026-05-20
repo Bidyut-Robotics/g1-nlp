@@ -965,8 +965,9 @@ class LiveAudioPipeline:
                             last_debug_at = now
 
                         # Gate threshold check on energy — suppresses false positives in silence
+                        # Do NOT reset _ww_consec here: energy naturally dips between phonemes
+                        # and resetting breaks consecutive-frame detection.
                         if energy < SPEECH_START_THRESHOLD:
-                            _ww_consec = 0
                             continue
 
                         if score >= self.wakeword_threshold:
