@@ -119,59 +119,11 @@ def _cleanup(sig=None, frame=None):
 signal.signal(signal.SIGINT,  _cleanup)
 signal.signal(signal.SIGTERM, _cleanup)
 
-# ── Built-in ASR via ros2 topic echo subprocess ──────────────────────────────
-_asr_event  = threading.Event()
-_asr_latest = {"text": "", "ts": 0.0}
-
-def _asr_thread():
-    """Direct cyclonedds subscriber for rt/audio_msg — no ros2 CLI subprocess."""
-    from cyclonedds.domain import DomainParticipant
-    from cyclonedds.topic import Topic
-    from cyclonedds.sub import DataReader
-    from cyclonedds.core import Listener
-    from cyclonedds.internal import InvalidSample
-    from unitree_sdk2py.idl.std_msgs.msg.dds_ import String_
-
-    def _on_data(reader):
-        try:
-            for sample in reader.take(N=100):
-                if isinstance(sample, InvalidSample):
-                    continue
-                try:
-                    info = json.loads(sample.data)
-                except Exception:
-                    continue
-                text = info.get("text", "").strip()
-                lang = info.get("language", "")
-                conf = float(info.get("confidence", 0))
-                if not text:
-                    continue
-                # Skip non-English: explicit tag says non-English, or no tag but text is CJK
-                if lang:
-                    if "en" not in lang.lower():
-                        print(f"[ASR skip] lang={lang}: '{text}'", flush=True)
-                        continue
-                elif not text.isascii():
-                    print(f"[ASR skip] non-ASCII (no lang): '{text}'", flush=True)
-                    continue
-                _asr_latest["text"] = text
-                _asr_latest["ts"]   = time.time()
-                _asr_event.set()
-                print(f"[ASR] '{text}'  lang={lang}  conf={conf:.2f}", flush=True)
-        except Exception as e:
-            print(f"[ASR read error] {e}", flush=True)
-
-    try:
-        part   = DomainParticipant(0)
-        topic  = Topic(part, "rt/audio_msg", String_)
-        reader = DataReader(part, topic, listener=Listener(on_data_available=_on_data))
-        print("[DEMO] ASR DDS reader ready (rt/audio_msg).")
-        while True:
-            time.sleep(60)
-    except Exception as e:
-        print(f"[ASR init failed] {e}", flush=True)
-
-threading.Thread(target=_asr_thread, daemon=True).start()
+# ── Whisper ASR (GPU) ─────────────────────────────────────────────────────────
+from faster_whisper import WhisperModel
+print("[DEMO] Loading Whisper medium on CUDA ...")
+asr = WhisperModel("medium.en", device="cuda", compute_type="float16")
+print("[DEMO] ASR ready.")
 
 # ── Multicast mic receiver (for OWW wake word only) ──────────────────────────
 _audio_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=200)
@@ -337,18 +289,27 @@ while True:
     led(*LED_OFF)
     time.sleep(0.05)
 
-    # PHASE 2: listen for command via built-in ASR
+    # PHASE 2: record command and transcribe with GPU Whisper
     say("Yes?", wait=0.5)
-
-    # LED: blue = listening
     led(*LED_BLUE)
 
-    _asr_event.clear()
-    got = _asr_event.wait(timeout=RECORD_SECONDS)
-    transcript = _asr_latest["text"] if got else ""
+    print(f"[DEMO] Listening for command ({RECORD_SECONDS}s) ...")
+    frames = []
+    deadline = time.time() + RECORD_SECONDS
+    while time.time() < deadline:
+        try:
+            frames.append(_audio_q.get(timeout=0.1))
+        except queue.Empty:
+            continue
 
-    # LED: off = done listening
     led(*LED_OFF)
+
+    if not frames:
+        transcript = ""
+    else:
+        audio_np = np.concatenate(frames).astype(np.float32) / 32768.0
+        segments, _ = asr.transcribe(audio_np, language="en", beam_size=3)
+        transcript = " ".join(seg.text for seg in segments).strip()
 
     print(f"[DEMO] Heard: '{transcript}'")
 
