@@ -20,6 +20,7 @@ Requirements:
 """
 
 import json
+import re
 import signal
 import socket
 import struct
@@ -64,8 +65,7 @@ LOCAL_IP = get_local_ip(NETWORK_INTERFACE)
 print(f"[DEMO] Interface={NETWORK_INTERFACE}, local_ip={LOCAL_IP}")
 
 # ── DDS / SDK init ────────────────────────────────────────────────────────────
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
-from unitree_sdk2py.idl.std_msgs.msg.dds_ import String_
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
 from unitree_sdk2py.g1.arm.g1_arm_action_client import G1ArmActionClient, action_map
 from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
@@ -119,25 +119,38 @@ def _cleanup(sig=None, frame=None):
 signal.signal(signal.SIGINT,  _cleanup)
 signal.signal(signal.SIGTERM, _cleanup)
 
-# ── Built-in ASR subscriber (rt/audio_msg) ───────────────────────────────────
+# ── Built-in ASR via ros2 topic echo subprocess ──────────────────────────────
 _asr_event  = threading.Event()
 _asr_latest = {"text": "", "ts": 0.0}
 
-def _on_asr(msg: String_):
-    try:
-        info = json.loads(msg.data)
-        text = info.get("text", "").strip()
-        if text and info.get("is_final", 1):
-            _asr_latest["text"] = text
-            _asr_latest["ts"]   = time.time()
-            _asr_event.set()
-            print(f"[ASR] '{text}'  conf={info.get('confidence', '?')}", flush=True)
-    except Exception:
-        pass
+def _asr_thread():
+    """Parse /audio_msg from ros2 topic echo — works even with truncated output."""
+    while True:
+        try:
+            proc = subprocess.Popen(
+                ["ros2", "topic", "echo", "/audio_msg"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, bufsize=1,
+            )
+            for line in proc.stdout:
+                line = line.strip()
+                if not line.startswith("data: "):
+                    continue
+                m = re.search(r'"text"\s*:\s*"([^"]*)"', line)
+                if m:
+                    text = m.group(1).strip()
+                    if text:
+                        _asr_latest["text"] = text
+                        _asr_latest["ts"]   = time.time()
+                        _asr_event.set()
+                        print(f"[ASR] '{text}'", flush=True)
+            proc.wait()
+        except Exception as e:
+            print(f"[ASR thread error] {e}", flush=True)
+        time.sleep(2)
 
-asr_sub = ChannelSubscriber("rt/audio_msg", String_)
-asr_sub.Init(_on_asr, 10)
-print("[DEMO] Built-in ASR subscriber ready (rt/audio_msg).")
+threading.Thread(target=_asr_thread, daemon=True).start()
+print("[DEMO] Built-in ASR thread started (/audio_msg).")
 
 # ── Multicast mic receiver (for OWW wake word only) ──────────────────────────
 _audio_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=200)
