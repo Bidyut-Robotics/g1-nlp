@@ -12,9 +12,10 @@ Wake word : "Hey Jarvis"
 Commands  : "handshake"    → shake hand + speak
             "move forward" → walk forward + speak
             "move backward"→ walk backward + speak
+            "wave"         → wave hand + speak
 
 Requirements:
-    pip install openwakeword faster-whisper sounddevice numpy
+    pip install openwakeword numpy
     unitree_sdk2py must be installed
 """
 
@@ -38,10 +39,14 @@ OWW_CHUNK         = 1280        # OpenWakeWord: 80 ms at 16 kHz
 SAMPLE_RATE       = 16000
 WW_THRESHOLD      = 0.3
 WW_KEY            = "hey_jarvis"
-RECORD_SECONDS    = 4.0
+RECORD_SECONDS    = 5.0
 MOVE_DURATION     = 2.0
 
 API_SET_MODE      = 1008        # Unitree voice service: mic control
+
+LED_GREEN  = (0, 255, 0)
+LED_BLUE   = (0, 0, 255)
+LED_OFF    = (0, 0, 0)
 
 
 def get_local_ip(interface: str) -> str:
@@ -59,7 +64,8 @@ LOCAL_IP = get_local_ip(NETWORK_INTERFACE)
 print(f"[DEMO] Interface={NETWORK_INTERFACE}, local_ip={LOCAL_IP}")
 
 # ── DDS / SDK init ────────────────────────────────────────────────────────────
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
+from unitree_sdk2py.idl.std_msgs.msg.dds_ import String_
 from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
 from unitree_sdk2py.g1.arm.g1_arm_action_client import G1ArmActionClient, action_map
 from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
@@ -98,15 +104,42 @@ if code != 0:
 else:
     print("[DEMO] Microphone active.")
 
+def led(r: int, g: int, b: int):
+    try:
+        audio_client.LedControl(r, g, b)
+    except Exception as e:
+        print(f"[DEMO LED ERROR] {e}")
+
 def _cleanup(sig=None, frame=None):
-    print("\n[DEMO] Shutting down — deactivating mic ...")
+    print("\n[DEMO] Shutting down ...")
+    led(*LED_OFF)
     mic_set_mode(2)   # 2 = idle
     sys.exit(0)
 
 signal.signal(signal.SIGINT,  _cleanup)
 signal.signal(signal.SIGTERM, _cleanup)
 
-# ── Multicast mic receiver ────────────────────────────────────────────────────
+# ── Built-in ASR subscriber (rt/audio_msg) ───────────────────────────────────
+_asr_event  = threading.Event()
+_asr_latest = {"text": "", "ts": 0.0}
+
+def _on_asr(msg: String_):
+    try:
+        info = json.loads(msg.data)
+        text = info.get("text", "").strip()
+        if text and info.get("is_final", False):
+            _asr_latest["text"] = text
+            _asr_latest["ts"]   = time.time()
+            _asr_event.set()
+            print(f"[ASR] '{text}'  conf={info.get('confidence', '?')}", flush=True)
+    except Exception:
+        pass
+
+asr_sub = ChannelSubscriber("rt/audio_msg", String_)
+asr_sub.Init(_on_asr, 10)
+print("[DEMO] Built-in ASR subscriber ready (rt/audio_msg).")
+
+# ── Multicast mic receiver (for OWW wake word only) ──────────────────────────
 _audio_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=200)
 
 def _mic_thread():
@@ -155,12 +188,6 @@ from openwakeword.model import Model as OWWModel
 print("[DEMO] Loading OpenWakeWord (hey_jarvis) ...")
 oww = OWWModel(wakeword_models=["hey_jarvis"], inference_framework="onnx")
 print("[DEMO] Wake word ready.")
-
-# ── ASR model ─────────────────────────────────────────────────────────────────
-from faster_whisper import WhisperModel
-print("[DEMO] Loading Whisper tiny (CPU) ...")
-asr = WhisperModel("small.en", device="cpu", compute_type="int8")
-print("[DEMO] ASR ready.")
 
 # ── TTS ───────────────────────────────────────────────────────────────────────
 def say(text: str, wait: float = 2.5):
@@ -243,7 +270,7 @@ while True:
         score = float(scores.get(WW_KEY, max(scores.values(), default=0.0)))
 
         _log_counter += 1
-        if score >= 0.1 or _log_counter % 25 == 0:  # always log if score notable, else every ~2s
+        if score >= 0.1 or _log_counter % 25 == 0:
             print(f"[STANDBY] score={score:.3f}  energy={energy:.1f}", flush=True)
 
         if score >= WW_THRESHOLD:
@@ -257,25 +284,30 @@ while True:
 
     drain_queue()
 
-    # PHASE 2: record command
-    say("Yes?", wait=0.8)
-    print(f"[DEMO] Listening for command ({RECORD_SECONDS}s) ...")
-    frames = []
-    deadline = time.time() + RECORD_SECONDS
-    while time.time() < deadline:
-        try:
-            frames.append(_audio_q.get(timeout=0.1))
-        except queue.Empty:
-            continue
+    # LED: green flash → wake word detected
+    led(*LED_GREEN)
+    time.sleep(0.3)
+    led(*LED_OFF)
+    time.sleep(0.05)
 
-    if not frames:
+    # PHASE 2: listen for command via built-in ASR
+    say("Yes?", wait=0.5)
+
+    # LED: blue = listening
+    led(*LED_BLUE)
+
+    _asr_event.clear()
+    got = _asr_event.wait(timeout=RECORD_SECONDS)
+    transcript = _asr_latest["text"] if got else ""
+
+    # LED: off = done listening
+    led(*LED_OFF)
+
+    print(f"[DEMO] Heard: '{transcript}'")
+
+    if not transcript:
         say("I didn't hear anything. Please try again.")
         continue
-
-    audio_np = np.concatenate(frames).astype(np.float32) / 32768.0
-    segments, _ = asr.transcribe(audio_np, language="en", beam_size=1)
-    transcript = " ".join(seg.text for seg in segments).strip()
-    print(f"[DEMO] Heard: '{transcript}'")
 
     if not dispatch(transcript):
         say("Sorry, I did not understand. Try saying: handshake, move forward, or move backward.")
