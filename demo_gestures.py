@@ -137,14 +137,23 @@ def _asr_thread():
             for sample in reader.take(N=100):
                 if isinstance(sample, InvalidSample):
                     continue
-                m = re.search(r'"text"\s*:\s*"([^"]*)"', sample.data)
-                if m:
-                    text = m.group(1).strip()
-                    if text:
-                        _asr_latest["text"] = text
-                        _asr_latest["ts"]   = time.time()
-                        _asr_event.set()
-                        print(f"[ASR] '{text}'", flush=True)
+                try:
+                    info = json.loads(sample.data)
+                except Exception:
+                    continue
+                text = info.get("text", "").strip()
+                lang = info.get("language", "")
+                conf = float(info.get("confidence", 0))
+                if not text:
+                    continue
+                # Skip Chinese / Japanese / other non-English hallucinations
+                if lang and "en" not in lang.lower():
+                    print(f"[ASR skip] {lang}: '{text}'", flush=True)
+                    continue
+                _asr_latest["text"] = text
+                _asr_latest["ts"]   = time.time()
+                _asr_event.set()
+                print(f"[ASR] '{text}'  lang={lang}  conf={conf:.2f}", flush=True)
         except Exception as e:
             print(f"[ASR read error] {e}", flush=True)
 
@@ -262,12 +271,21 @@ COMMANDS = {
 }
 
 def dispatch(transcript: str) -> bool:
-    t = transcript.lower()
+    t = re.sub(r"[.,!?'\"]", "", transcript.lower()).strip()
+    # Forward: keyword inside transcript (exact)
     for keyword, (fn, response) in COMMANDS.items():
         if keyword in t:
             say(response, wait=1.5)
             fn()
             return True
+    # Reverse: transcript is a substring of a keyword (handles partial ASR, e.g. "andsh" ⊆ "handshake")
+    if len(t) >= 4:
+        for keyword, (fn, response) in COMMANDS.items():
+            if t in keyword:
+                print(f"[DEMO] Partial match: '{t}' ⊆ '{keyword}'")
+                say(response, wait=1.5)
+                fn()
+                return True
     return False
 
 def drain_queue():
