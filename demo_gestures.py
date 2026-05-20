@@ -215,10 +215,17 @@ print("\n[DEMO] Ready. Say 'Hey Jarvis' to activate.\n")
 while True:
     # PHASE 1: wait for wake word
     consec = 0
+    _log_counter = 0
     while True:
         chunk = _audio_q.get()
+        energy = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
         scores = oww.predict(chunk)
         score = float(scores.get(WW_KEY, max(scores.values(), default=0.0)))
+
+        _log_counter += 1
+        if score >= 0.1 or _log_counter % 25 == 0:  # always log if score notable, else every ~2s
+            print(f"[STANDBY] score={score:.3f}  energy={energy:.1f}", flush=True)
+
         if score >= WW_THRESHOLD:
             consec += 1
         else:
