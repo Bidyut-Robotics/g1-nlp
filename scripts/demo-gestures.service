@@ -1,0 +1,15 @@
+[Unit]
+Description=Jarvis Demo — Voice Wake Word + Gestures
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=unitree
+WorkingDirectory=/home/unitree/nlp/g1-nlp
+ExecStart=/home/unitree/miniconda3/envs/demo/bin/python3 demo_gestures.py eth0
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
