@@ -58,7 +58,7 @@
   },
 
   "wake_word": {
-    "model": "models/hey_jarvis_v0.1.onnx",
+    "model": "hey_jarvis",
     "display_name": "Jarvis",
     "threshold": 0.35
   },
