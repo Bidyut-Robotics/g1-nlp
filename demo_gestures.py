@@ -119,16 +119,10 @@ def _cleanup(sig=None, frame=None):
 signal.signal(signal.SIGINT,  _cleanup)
 signal.signal(signal.SIGTERM, _cleanup)
 
-# ── Whisper ASR (HuggingFace transformers, GPU) ───────────────────────────────
-import torch
-from transformers import pipeline as hf_pipeline
-print("[DEMO] Loading whisper-large-v3-turbo on CUDA ...")
-asr = hf_pipeline(
-    "automatic-speech-recognition",
-    model="openai/whisper-large-v3-turbo",
-    dtype=torch.float16,
-    device="cuda:0",
-)
+# ── Parakeet ASR (nano-parakeet — pure PyTorch, no NeMo / no onnxruntime) ─────
+from nano_parakeet import from_pretrained
+print("[DEMO] Loading Parakeet TDT 0.6B-v3 on CUDA (~1.1 GB, first run downloads) ...")
+asr = from_pretrained()
 print("[DEMO] ASR ready.")
 
 # ── Multicast mic receiver (for OWW wake word only) ──────────────────────────
@@ -176,7 +170,28 @@ threading.Thread(target=_mic_thread, daemon=True).start()
 time.sleep(0.5)
 
 # ── Wake word model ───────────────────────────────────────────────────────────
+# openwakeword/vad.py imports onnxruntime unconditionally at module load time.
+# On Jetson Orin (ARM) onnxruntime crashes with "Unknown CPU vendor" assertion.
+# Stub it before the import so OWW falls through to tflite without ever calling it.
+import sys as _sys, types as _types
+if "onnxruntime" not in _sys.modules:
+    _ort_stub = _types.ModuleType("onnxruntime")
+    class _OrtInferenceSession:
+        def __init__(self, *a, **kw):
+            raise RuntimeError("onnxruntime stubbed — tflite path only on this platform")
+    _ort_stub.InferenceSession = _OrtInferenceSession
+    _sys.modules["onnxruntime"] = _ort_stub
+
 from openwakeword.model import Model as OWWModel
+import openwakeword.utils as _oww_utils
+
+print("[DEMO] Checking OWW tflite models ...")
+try:
+    _oww_utils.download_models()
+    print("[DEMO] OWW models ready.")
+except Exception as _e:
+    print(f"[DEMO] OWW model download skipped: {_e}")
+
 print("[DEMO] Loading OpenWakeWord (hey_jarvis) ...")
 oww = OWWModel(wakeword_models=["hey_jarvis"], inference_framework="tflite")
 print("[DEMO] Wake word ready.")
@@ -314,9 +329,7 @@ while True:
         transcript = ""
     else:
         audio_np = np.concatenate(frames).astype(np.float32) / 32768.0
-        result = asr({"raw": audio_np, "sampling_rate": SAMPLE_RATE},
-                     generate_kwargs={"language": "english", "task": "transcribe"})
-        transcript = result["text"].strip()
+        transcript = asr.transcribe(audio_np).strip()
 
     print(f"[DEMO] Heard: '{transcript}'")
 
