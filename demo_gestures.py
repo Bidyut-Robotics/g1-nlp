@@ -142,7 +142,7 @@ def _transcribe(audio_np: np.ndarray) -> str:
 
 # ── Silero VAD ────────────────────────────────────────────────────────────────
 print("[DEMO] Loading Silero VAD ...")
-_vad_model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad", force_reload=False)
+_vad_model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad", force_reload=False, trust_repo=True)
 _vad_model.eval()
 print("[DEMO] VAD ready.")
 
