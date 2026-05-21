@@ -42,7 +42,7 @@ WW_THRESHOLD      = 0.3
 WW_KEY            = "hey_jarvis"
 MAX_RECORD_SECONDS = 8.0      # absolute cap for VAD-based recording
 SPEECH_TIMEOUT_S  = 0.7       # silence after speech ends → stop recording
-VAD_THRESHOLD     = 0.008     # normalized RMS energy threshold for speech detection
+VAD_THRESHOLD     = 0.025     # normalized RMS energy threshold (above background ~0.012)
 FUZZY_THRESHOLD   = 72        # rapidfuzz partial_ratio min score (0–100)
 MOVE_DURATION     = 2.0
 
@@ -341,6 +341,7 @@ while True:
 
     # PHASE 2: record command with Silero VAD endpoint detection
     say("Yes?", wait=0.5)
+    drain_queue()   # flush TTS echo before listening
     led(*LED_BLUE)
 
     _silence_limit = max(1, round(SPEECH_TIMEOUT_S * SAMPLE_RATE / OWW_CHUNK))  # chunks of silence to stop
