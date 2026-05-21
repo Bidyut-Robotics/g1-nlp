@@ -38,7 +38,7 @@ MULTICAST_GROUP   = "239.168.123.161"
 MULTICAST_PORT    = 5555
 OWW_CHUNK         = 1280        # OpenWakeWord: 80 ms at 16 kHz
 SAMPLE_RATE       = 16000
-WW_THRESHOLD      = 0.3
+WW_THRESHOLD      = 0.2
 WW_KEY            = "hey_jarvis"
 MAX_RECORD_SECONDS = 8.0      # absolute cap for VAD-based recording
 SPEECH_TIMEOUT_S  = 0.7       # silence after speech ends → stop recording
@@ -344,9 +344,10 @@ while True:
     drain_queue()   # flush TTS echo before listening
     led(*LED_BLUE)
 
-    _silence_limit = max(1, round(SPEECH_TIMEOUT_S * SAMPLE_RATE / OWW_CHUNK))  # chunks of silence to stop
+    _silence_limit = max(1, round(SPEECH_TIMEOUT_S * SAMPLE_RATE / OWW_CHUNK))
     frames = []
     speech_started = False
+    speech_consec  = 0      # consecutive above-threshold chunks to confirm real speech vs spike
     silence_chunks = 0
     deadline = time.time() + MAX_RECORD_SECONDS
 
@@ -358,13 +359,17 @@ while True:
             continue
         frames.append(chunk)
         if _vad_prob(chunk) >= VAD_THRESHOLD:
-            speech_started = True
+            speech_consec += 1
+            if speech_consec >= 3:   # ~240 ms sustained above threshold = real speech
+                speech_started = True
             silence_chunks = 0
-        elif speech_started:
-            silence_chunks += 1
-            if silence_chunks >= _silence_limit:
-                print(f"[DEMO] VAD: speech ended ({len(frames)} chunks)")
-                break
+        else:
+            speech_consec = 0
+            if speech_started:
+                silence_chunks += 1
+                if silence_chunks >= _silence_limit:
+                    print(f"[DEMO] VAD: speech ended ({len(frames)} chunks)")
+                    break
 
     led(*LED_OFF)
 
