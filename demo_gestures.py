@@ -42,7 +42,7 @@ WW_THRESHOLD      = 0.3
 WW_KEY            = "hey_jarvis"
 MAX_RECORD_SECONDS = 8.0      # absolute cap for VAD-based recording
 SPEECH_TIMEOUT_S  = 0.7       # silence after speech ends → stop recording
-VAD_THRESHOLD     = 0.5       # Silero speech probability cutoff
+VAD_THRESHOLD     = 0.008     # normalized RMS energy threshold for speech detection
 FUZZY_THRESHOLD   = 72        # rapidfuzz partial_ratio min score (0–100)
 MOVE_DURATION     = 2.0
 
@@ -140,17 +140,9 @@ def _transcribe(audio_np: np.ndarray) -> str:
     ids = _ms_model.generate(**inputs, max_length=max(max_len, 1))
     return _ms_proc.decode(ids[0], skip_special_tokens=True).strip()
 
-# ── Silero VAD ────────────────────────────────────────────────────────────────
-print("[DEMO] Loading Silero VAD ...")
-_vad_model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad", force_reload=False, trust_repo=True)
-_vad_model.eval()
-print("[DEMO] VAD ready.")
-
+# ── Energy VAD (no extra deps — robust enough for controlled robotics env) ────
 def _vad_prob(chunk: np.ndarray) -> float:
-    # Silero needs exactly 512 samples at 16 kHz; our chunks are 1280 — use first 512
-    t = torch.from_numpy(chunk[:512].astype(np.float32) / 32768.0)
-    with torch.no_grad():
-        return float(_vad_model(t, SAMPLE_RATE))
+    return float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2))) / 32768.0
 
 # ── Multicast mic receiver (for OWW wake word only) ──────────────────────────
 _audio_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=200)
