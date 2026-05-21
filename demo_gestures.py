@@ -40,7 +40,10 @@ OWW_CHUNK         = 1280        # OpenWakeWord: 80 ms at 16 kHz
 SAMPLE_RATE       = 16000
 WW_THRESHOLD      = 0.3
 WW_KEY            = "hey_jarvis"
-RECORD_SECONDS    = 5.0
+MAX_RECORD_SECONDS = 8.0      # absolute cap for VAD-based recording
+SPEECH_TIMEOUT_S  = 0.7       # silence after speech ends → stop recording
+VAD_THRESHOLD     = 0.5       # Silero speech probability cutoff
+FUZZY_THRESHOLD   = 72        # rapidfuzz partial_ratio min score (0–100)
 MOVE_DURATION     = 2.0
 
 API_SET_MODE      = 1008        # Unitree voice service: mic control
@@ -119,11 +122,35 @@ def _cleanup(sig=None, frame=None):
 signal.signal(signal.SIGINT,  _cleanup)
 signal.signal(signal.SIGTERM, _cleanup)
 
-# ── Parakeet ASR (nano-parakeet — pure PyTorch, no NeMo / no onnxruntime) ─────
-from nano_parakeet import from_pretrained
-print("[DEMO] Loading Parakeet TDT 0.6B-v3 on CUDA (~1.1 GB, first run downloads) ...")
-asr = from_pretrained()
+# ── Moonshine ASR (CPU, streaming-optimized, ~27M params) ────────────────────
+import torch
+from transformers import MoonshineStreamingForConditionalGeneration, AutoProcessor
+
+print("[DEMO] Loading Moonshine-streaming-small on CPU ...")
+_ms_model = MoonshineStreamingForConditionalGeneration.from_pretrained(
+    "usefulsensors/moonshine-streaming-small"
+).to("cpu")
+_ms_proc  = AutoProcessor.from_pretrained("usefulsensors/moonshine-streaming-small")
+_ms_token_limit = 6.5 / _ms_proc.feature_extractor.sampling_rate
 print("[DEMO] ASR ready.")
+
+def _transcribe(audio_np: np.ndarray) -> str:
+    inputs = _ms_proc(audio_np, return_tensors="pt", sampling_rate=SAMPLE_RATE)
+    max_len = int((inputs.attention_mask.sum(dim=-1) * _ms_token_limit).max().item())
+    ids = _ms_model.generate(**inputs, max_length=max(max_len, 1))
+    return _ms_proc.decode(ids[0], skip_special_tokens=True).strip()
+
+# ── Silero VAD ────────────────────────────────────────────────────────────────
+print("[DEMO] Loading Silero VAD ...")
+_vad_model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad", force_reload=False)
+_vad_model.eval()
+print("[DEMO] VAD ready.")
+
+def _vad_prob(chunk: np.ndarray) -> float:
+    # Silero needs exactly 512 samples at 16 kHz; our chunks are 1280 — use first 512
+    t = torch.from_numpy(chunk[:512].astype(np.float32) / 32768.0)
+    with torch.no_grad():
+        return float(_vad_model(t, SAMPLE_RATE))
 
 # ── Multicast mic receiver (for OWW wake word only) ──────────────────────────
 _audio_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=200)
@@ -247,19 +274,20 @@ COMMANDS = {
     "goodbye":            (do_hand_wave, "Goodbye! See you soon."),
 }
 
+from rapidfuzz import process as _fuzz_process, fuzz as _fuzz
+
 def dispatch(transcript: str) -> bool:
-    # Strip embedded non-ASCII (CJK mixed into English results like 'Goodバイ.' → 'Good.')
     t = re.sub(r"[^\x00-\x7F]+", "", transcript)
     t = re.sub(r"[.,!?'\"]", "", t).lower().strip()
     if not t:
         return False
-    # Forward: keyword inside transcript (exact)
+    # Exact: keyword anywhere in transcript
     for keyword, (fn, response) in COMMANDS.items():
         if keyword in t:
             say(response, wait=1.5)
             fn()
             return True
-    # Reverse: transcript is a substring of a keyword (handles partial ASR, e.g. "andsh" ⊆ "handshake")
+    # Partial: short truncated transcript is substring of a keyword
     if len(t) >= 4:
         for keyword, (fn, response) in COMMANDS.items():
             if t in keyword:
@@ -267,6 +295,15 @@ def dispatch(transcript: str) -> bool:
                 say(response, wait=1.5)
                 fn()
                 return True
+    # Fuzzy: catch ASR typos (e.g. "foreward" → "forward", "handschake" → "handshake")
+    result = _fuzz_process.extractOne(t, list(COMMANDS.keys()), scorer=_fuzz.token_set_ratio)
+    if result and result[1] >= FUZZY_THRESHOLD:
+        keyword, score = result[0], result[1]
+        fn, response = COMMANDS[keyword]
+        print(f"[DEMO] Fuzzy match: '{t}' → '{keyword}' ({score}%)")
+        say(response, wait=1.5)
+        fn()
+        return True
     return False
 
 def drain_queue():
@@ -310,18 +347,31 @@ while True:
     led(*LED_OFF)
     time.sleep(0.05)
 
-    # PHASE 2: record command and transcribe with GPU Whisper
+    # PHASE 2: record command with Silero VAD endpoint detection
     say("Yes?", wait=0.5)
     led(*LED_BLUE)
 
-    print(f"[DEMO] Listening for command ({RECORD_SECONDS}s) ...")
+    _silence_limit = max(1, round(SPEECH_TIMEOUT_S * SAMPLE_RATE / OWW_CHUNK))  # chunks of silence to stop
     frames = []
-    deadline = time.time() + RECORD_SECONDS
+    speech_started = False
+    silence_chunks = 0
+    deadline = time.time() + MAX_RECORD_SECONDS
+
+    print(f"[DEMO] Listening for command (VAD, max {MAX_RECORD_SECONDS}s) ...")
     while time.time() < deadline:
         try:
-            frames.append(_audio_q.get(timeout=0.1))
+            chunk = _audio_q.get(timeout=0.1)
         except queue.Empty:
             continue
+        frames.append(chunk)
+        if _vad_prob(chunk) >= VAD_THRESHOLD:
+            speech_started = True
+            silence_chunks = 0
+        elif speech_started:
+            silence_chunks += 1
+            if silence_chunks >= _silence_limit:
+                print(f"[DEMO] VAD: speech ended ({len(frames)} chunks)")
+                break
 
     led(*LED_OFF)
 
@@ -329,7 +379,7 @@ while True:
         transcript = ""
     else:
         audio_np = np.concatenate(frames).astype(np.float32) / 32768.0
-        transcript = asr.transcribe(audio_np).strip()
+        transcript = _transcribe(audio_np)
 
     print(f"[DEMO] Heard: '{transcript}'")
 
