@@ -128,9 +128,13 @@ from transformers import MoonshineStreamingForConditionalGeneration, AutoProcess
 
 print("[DEMO] Loading Moonshine-streaming-small on CPU ...")
 _ms_model = MoonshineStreamingForConditionalGeneration.from_pretrained(
-    "usefulsensors/moonshine-streaming-small"
+    "usefulsensors/moonshine-streaming-small",
+    local_files_only=True,
 ).to("cpu")
-_ms_proc  = AutoProcessor.from_pretrained("usefulsensors/moonshine-streaming-small")
+_ms_proc  = AutoProcessor.from_pretrained(
+    "usefulsensors/moonshine-streaming-small",
+    local_files_only=True,
+)
 _ms_token_limit = 6.5 / _ms_proc.feature_extractor.sampling_rate
 print("[DEMO] ASR ready.")
 
