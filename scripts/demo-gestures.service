@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=unitree
 WorkingDirectory=/home/unitree/nlp/g1-nlp
+Environment="LD_PRELOAD=/home/unitree/miniconda3/envs/demo/lib/python3.10/site-packages/scikit_learn.libs/libgomp-947d5fa1.so.1.0.0"
 ExecStart=/home/unitree/miniconda3/envs/demo/bin/python3 demo_gestures.py eth0
 Restart=on-failure
 RestartSec=5
