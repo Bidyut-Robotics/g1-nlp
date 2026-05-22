@@ -1,7 +1,7 @@
 import os
 from .interfaces import IASRProvider, ILLMProvider, ITTSProvider
 from .config import get_llm_config, get_tts_config, load_app_config
-from services.asr.asr_service import FasterWhisperASR
+from services.asr.asr_service import FasterWhisperASR, ParakeetASR
 from services.reasoning.llm_service import OllamaLLM, GroqLLM
 from services.reasoning.openai_service import EnterpriseChatGPT
 from services.tts.tts_service import PiperTTS, G1BuiltinTTS, G1DirectTTS, G1BridgeTTS
@@ -21,8 +21,14 @@ class ServiceFactory:
     @staticmethod
     def get_asr_provider() -> IASRProvider:
         cfg = load_app_config().get("asr", {})
-        model_size = os.getenv("ASR_MODEL_SIZE", cfg.get("model_size", "tiny"))
+        mode = os.getenv("ASR_MODE", cfg.get("mode", "whisper")).lower()
         device = os.getenv("ASR_DEVICE", cfg.get("device", "cpu"))
+
+        if mode == "parakeet":
+            return ParakeetASR(device=device)
+
+        # default: whisper
+        model_size = os.getenv("ASR_MODEL_SIZE", cfg.get("model_size", "tiny"))
         compute_type = os.getenv("ASR_COMPUTE_TYPE", cfg.get("compute_type", "int8"))
         return FasterWhisperASR(
             model_size=model_size,
