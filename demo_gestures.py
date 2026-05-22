@@ -8,7 +8,7 @@ Usage:
     python3 demo_gestures.py [network_interface]
     python3 demo_gestures.py eth0
 
-Wake word : "Hey Jarvis"
+Wake word : "Alexa"
 Commands  : "handshake"    → shake hand + speak
             "move forward" → walk forward + speak
             "move backward"→ walk backward + speak
@@ -29,8 +29,9 @@ import sys
 import threading
 import time
 import queue
-
+import torch
 import numpy as np
+from transformers import MoonshineForConditionalGeneration, AutoProcessor
 
 # ── Config ────────────────────────────────────────────────────────────────────
 NETWORK_INTERFACE = sys.argv[1] if len(sys.argv) > 1 else "eth0"
@@ -39,7 +40,7 @@ MULTICAST_PORT    = 5555
 OWW_CHUNK         = 1280        # OpenWakeWord: 80 ms at 16 kHz
 SAMPLE_RATE       = 16000
 WW_THRESHOLD      = 0.3
-WW_KEY            = "hey_jarvis"
+WW_KEY            = "alexa"
 MAX_RECORD_SECONDS = 8.0      # absolute cap for VAD-based recording
 SPEECH_TIMEOUT_S  = 0.7       # silence after speech ends → stop recording
 VAD_THRESHOLD     = 0.025     # normalized RMS energy threshold (above background ~0.012)
@@ -122,26 +123,20 @@ def _cleanup(sig=None, frame=None):
 signal.signal(signal.SIGINT,  _cleanup)
 signal.signal(signal.SIGTERM, _cleanup)
 
-# ── Moonshine ASR (CPU, streaming-optimized, ~27M params) ────────────────────
-import torch
-from transformers import MoonshineStreamingForConditionalGeneration, AutoProcessor
-
-print("[DEMO] Loading Moonshine-streaming-small on CPU ...")
-_ms_model = MoonshineStreamingForConditionalGeneration.from_pretrained(
-    "usefulsensors/moonshine-streaming-small",
-    local_files_only=True,
+# ── Moonshine ASR (Moonshine v2-tiny for fast, accurate English) ─────────────
+print("[DEMO] Loading Moonshine v2-tiny on CPU ...")
+_ms_model = MoonshineForConditionalGeneration.from_pretrained(
+    "moonshine-ai/moonshine-v2-tiny",
+    trust_remote_code=True,
 ).to("cpu")
-_ms_proc  = AutoProcessor.from_pretrained(
-    "usefulsensors/moonshine-streaming-small",
-    local_files_only=True,
-)
-_ms_token_limit = 6.5 / _ms_proc.feature_extractor.sampling_rate
+_ms_proc = AutoProcessor.from_pretrained("moonshine-ai/moonshine-v2-tiny")
 print("[DEMO] ASR ready.")
 
 def _transcribe(audio_np: np.ndarray) -> str:
     inputs = _ms_proc(audio_np, return_tensors="pt", sampling_rate=SAMPLE_RATE)
-    max_len = int((inputs.attention_mask.sum(dim=-1) * _ms_token_limit).max().item())
-    ids = _ms_model.generate(**inputs, max_length=max(max_len, 1))
+    duration = len(audio_np) / SAMPLE_RATE
+    max_new_tokens = max(int(duration * 5), 16)
+    ids = _ms_model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
     return _ms_proc.decode(ids[0], skip_special_tokens=True).strip()
 
 # ── Energy VAD (no extra deps — robust enough for controlled robotics env) ────
@@ -215,8 +210,8 @@ try:
 except Exception as _e:
     print(f"[DEMO] OWW model download skipped: {_e}")
 
-print("[DEMO] Loading OpenWakeWord (hey_jarvis) ...")
-oww = OWWModel(wakeword_models=["hey_jarvis"], inference_framework="tflite")
+print("[DEMO] Loading OpenWakeWord (alexa) ...")
+oww = OWWModel(wakeword_models=["alexa"], inference_framework="tflite")
 print("[DEMO] Wake word ready.")
 
 # ── TTS ───────────────────────────────────────────────────────────────────────
@@ -310,7 +305,7 @@ def drain_queue():
             break
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
-print("\n[DEMO] Ready. Say 'Hey Jarvis' to activate.\n")
+print("\n[DEMO] Ready. Say 'Alexa' to activate.\n")
 
 while True:
     # PHASE 1: wait for wake word
@@ -343,7 +338,7 @@ while True:
     led(*LED_OFF)
     time.sleep(0.05)
 
-    # PHASE 2: record command with Silero VAD endpoint detection
+    # PHASE 2: record command with VAD endpoint detection
     say("Yes?", wait=0.5)
     drain_queue()   # flush TTS echo before listening
     led(*LED_BLUE)
