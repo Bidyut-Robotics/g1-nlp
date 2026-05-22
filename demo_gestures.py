@@ -130,10 +130,11 @@ signal.signal(signal.SIGINT,  _cleanup)
 signal.signal(signal.SIGTERM, _cleanup)
 
 # ── Moonshine ASR (offline, CPU-optimized for English) ──────────────────────
-from transformers import AutoModelForCausalLM, AutoProcessor
+# ── Moonshine ASR (offline, CPU-optimized for English) ──────────────────────
+from transformers import MoonshineForConditionalGeneration, AutoProcessor
 
 print("[DEMO] Loading Moonshine Tiny (offline)...")
-_ms_model = AutoModelForCausalLM.from_pretrained(
+_ms_model = MoonshineForConditionalGeneration.from_pretrained(
     "./moonshine-tiny",  # local folder from download
     local_files_only=True,
 ).to("cpu")
@@ -142,10 +143,10 @@ print("[DEMO] ASR ready.")
 
 def _transcribe(audio_np: np.ndarray) -> str:
     inputs = _ms_proc(audio_np, return_tensors="pt", sampling_rate=SAMPLE_RATE)
-    # Generate transcription (no internet needed)
-    generated_ids = _ms_model.generate(**inputs)
+    duration = len(audio_np) / SAMPLE_RATE
+    max_new_tokens = max(int(duration * 5), 16)
+    generated_ids = _ms_model.generate(**inputs, max_new_tokens=max_new_tokens)
     return _ms_proc.decode(generated_ids[0], skip_special_tokens=True).strip()
-
 # ── Energy VAD (no extra deps — robust enough for controlled robotics env) ────
 def _vad_prob(chunk: np.ndarray) -> float:
     return float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2))) / 32768.0
