@@ -19,6 +19,12 @@ Requirements:
     unitree_sdk2py must be installed
 """
 
+#!/usr/bin/env python3
+import os
+
+# Fix for scikit-learn OpenMP TLS allocation error
+os.environ['LD_PRELOAD'] = '/home/unitree/miniconda3/envs/demo/lib/python3.10/site-packages/scikit_learn.libs/libgomp-947d5fa1.so.1.0.0'
+
 import json
 import re
 import signal
@@ -31,7 +37,7 @@ import time
 import queue
 import torch
 import numpy as np
-from transformers import MoonshineForConditionalGeneration, AutoProcessor
+# from transformers import MoonshineForConditionalGeneration, AutoProcessor
 
 # ── Config ────────────────────────────────────────────────────────────────────
 NETWORK_INTERFACE = sys.argv[1] if len(sys.argv) > 1 else "eth0"
@@ -123,21 +129,22 @@ def _cleanup(sig=None, frame=None):
 signal.signal(signal.SIGINT,  _cleanup)
 signal.signal(signal.SIGTERM, _cleanup)
 
-# ── Moonshine ASR (Moonshine v2-tiny for fast, accurate English) ─────────────
-print("[DEMO] Loading Moonshine v2-tiny on CPU ...")
-_ms_model = MoonshineForConditionalGeneration.from_pretrained(
-    "moonshine-ai/moonshine-v2-tiny",
-    trust_remote_code=True,
+# ── Moonshine ASR (offline, CPU-optimized for English) ──────────────────────
+from transformers import AutoModelForCausalLM, AutoProcessor
+
+print("[DEMO] Loading Moonshine Tiny (offline)...")
+_ms_model = AutoModelForCausalLM.from_pretrained(
+    "./moonshine-tiny",  # local folder from download
+    local_files_only=True,
 ).to("cpu")
-_ms_proc = AutoProcessor.from_pretrained("moonshine-ai/moonshine-v2-tiny")
+_ms_proc = AutoProcessor.from_pretrained("./moonshine-tiny", local_files_only=True)
 print("[DEMO] ASR ready.")
 
 def _transcribe(audio_np: np.ndarray) -> str:
     inputs = _ms_proc(audio_np, return_tensors="pt", sampling_rate=SAMPLE_RATE)
-    duration = len(audio_np) / SAMPLE_RATE
-    max_new_tokens = max(int(duration * 5), 16)
-    ids = _ms_model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
-    return _ms_proc.decode(ids[0], skip_special_tokens=True).strip()
+    # Generate transcription (no internet needed)
+    generated_ids = _ms_model.generate(**inputs)
+    return _ms_proc.decode(generated_ids[0], skip_special_tokens=True).strip()
 
 # ── Energy VAD (no extra deps — robust enough for controlled robotics env) ────
 def _vad_prob(chunk: np.ndarray) -> float:
