@@ -952,7 +952,10 @@ class LiveAudioPipeline:
                         energy = self._energy(chunk)
                         self.preroll_chunks.append(chunk)
 
-                        # Always feed every frame — OWW needs continuous audio for its sliding window
+                        # Skip dropped packets — feeding silence to OWW corrupts its sliding window
+                        if energy < 1e-6:
+                            continue
+
                         oww_chunk = chunk
                         if self.mic_gain != 1.0:
                             oww_chunk = np.clip(
