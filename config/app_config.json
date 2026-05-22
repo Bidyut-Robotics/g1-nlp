@@ -58,7 +58,7 @@
   },
 
   "wake_word": {
-    "model": "hey_jarvis",
+    "model": "alexa",
     "display_name": "Jarvis",
     "threshold": 0.3
   },
