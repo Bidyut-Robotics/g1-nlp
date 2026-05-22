@@ -46,7 +46,7 @@
 
   "tts": {
     "mode": "g1_bridge",
-    "model_path": "models/en_US-lessac-medium.onnx",
+    "model_path": "models/en_US-ryan-medium.onnx",
     "hindi_model_path": "models/hi_IN-priyamvada-medium.onnx",
     "player": "aplay"
   },
