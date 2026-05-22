@@ -252,6 +252,10 @@ class LiveAudioPipeline:
         self.hardware_mode = hw_cfg["mode"]
         self.device = os.getenv("MIC_DEVICE") or hw_cfg["mic_device"]
         self.tts_player_extra_args: list = hw_cfg.get("tts_player_extra_args", [])
+        # Mic gain applied before OWW — compensates for quiet mics on some robots.
+        # 1.0 = no change; 3.0–5.0 for robots where energy peaks at ~0.005–0.008.
+        g1_cfg = app_cfg.get("g1", {})
+        self.mic_gain: float = float(os.getenv("MIC_GAIN", str(g1_cfg.get("mic_gain", 1.0))))
 
         # ── PulseAudio WebRTC Echo Cancellation (laptop mode only) ────────────
         # G1 uses direct UDP multicast mic — PulseAudio not in the path.
@@ -948,7 +952,12 @@ class LiveAudioPipeline:
                         self.preroll_chunks.append(chunk)
 
                         # Always feed every frame — OWW needs continuous audio for its sliding window
-                        scores = self.wakeword_model.predict(chunk)
+                        oww_chunk = chunk
+                        if self.mic_gain != 1.0:
+                            oww_chunk = np.clip(
+                                chunk.astype(np.float32) * self.mic_gain, -32768, 32767
+                            ).astype(np.int16)
+                        scores = self.wakeword_model.predict(oww_chunk)
                         score = float(scores.get(
                             self.wakeword_key,
                             max(scores.values(), default=0.0)
