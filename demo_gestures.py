@@ -45,7 +45,7 @@ MULTICAST_GROUP   = "239.168.123.161"
 MULTICAST_PORT    = 5555
 OWW_CHUNK         = 1280        # 80 ms at 16 kHz
 SAMPLE_RATE       = 16000
-WW_THRESHOLD      = 0.6        # from eval: optimal_threshold
+WW_THRESHOLD      = 0.4        # from eval: optimal_threshold
 WAKEWORD_MODEL    = "./hey_daksh.onnx"
 MAX_RECORD_SECONDS = 8.0      # absolute cap for VAD-based recording
 SPEECH_TIMEOUT_S  = 0.7       # silence after speech ends → stop recording
@@ -277,27 +277,36 @@ COMMANDS = {
 
 from rapidfuzz import process as _fuzz_process, fuzz as _fuzz
 
+def _word_match(keyword: str, transcript: str) -> bool:
+    # Match whole words only — prevents "hi" matching inside "chicken", "this", etc.
+    return bool(re.search(r'\b' + re.escape(keyword) + r'\b', transcript))
+
 def dispatch(transcript: str) -> bool:
     t = re.sub(r"[^\x00-\x7F]+", "", transcript)
     t = re.sub(r"[.,!?'\"]", "", t).lower().strip()
     if not t:
         return False
-    # Exact: keyword anywhere in transcript
+
+    # Exact: keyword as whole word(s) in transcript
     for keyword, (fn, response) in COMMANDS.items():
-        if keyword in t:
+        if _word_match(keyword, t):
+            print(f"[DEMO] Exact match: '{t}' → '{keyword}'")
             say(response, wait=1.5)
             fn()
             return True
-    # Partial: short truncated transcript is substring of a keyword
+
+    # Partial: transcript is a whole-word prefix of a keyword
+    # e.g. "hand" → "handshake" (min 4 chars to avoid noise)
     if len(t) >= 4:
         for keyword, (fn, response) in COMMANDS.items():
-            if t in keyword:
+            if keyword.startswith(t) or t in keyword.split():
                 print(f"[DEMO] Partial match: '{t}' ⊆ '{keyword}'")
                 say(response, wait=1.5)
                 fn()
                 return True
-    # Fuzzy: catch ASR typos (e.g. "foreward" → "forward", "handschake" → "handshake")
-    result = _fuzz_process.extractOne(t, list(COMMANDS.keys()), scorer=_fuzz.token_set_ratio)
+
+    # Fuzzy: catch ASR typos ("foreward" → "forward", "handschake" → "handshake")
+    result = _fuzz_process.extractOne(t, list(COMMANDS.keys()), scorer=_fuzz.WRatio)
     if result and result[1] >= FUZZY_THRESHOLD:
         keyword, score = result[0], result[1]
         fn, response = COMMANDS[keyword]
@@ -305,6 +314,8 @@ def dispatch(transcript: str) -> bool:
         say(response, wait=1.5)
         fn()
         return True
+
+    print(f"[DEMO] No match for: '{t}'")
     return False
 
 def drain_queue():
