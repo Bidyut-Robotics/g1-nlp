@@ -129,23 +129,37 @@ def _cleanup(sig=None, frame=None):
 signal.signal(signal.SIGINT,  _cleanup)
 signal.signal(signal.SIGTERM, _cleanup)
 
-# ── Moonshine ASR (offline, CPU-optimized for English) ──────────────────────
-# ── Moonshine ASR (offline, CPU-optimized for English) ──────────────────────
-from transformers import MoonshineForConditionalGeneration, AutoProcessor
+# ── Moonshine ASR (moonshine-streaming-medium) ───────────────────────────────
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
-print("[DEMO] Loading Moonshine Tiny (offline)...")
-_ms_model = MoonshineForConditionalGeneration.from_pretrained(
-    "./moonshine-streaming-medium",  # local folder from download
+_ms_device     = "cuda" if torch.cuda.is_available() else "cpu"
+_ms_dtype      = torch.float16 if torch.cuda.is_available() else torch.float32
+_MS_MODEL_PATH = "./moonshine-streaming-medium"
+
+print(f"[DEMO] Loading Moonshine streaming-medium ({_ms_device}) ...")
+_ms_model = AutoModelForSpeechSeq2Seq.from_pretrained(
+    _MS_MODEL_PATH,
+    torch_dtype=_ms_dtype,
     local_files_only=True,
-).to("cpu")
-_ms_proc = AutoProcessor.from_pretrained("./moonshine-streaming-medium", local_files_only=True)
+    trust_remote_code=True,
+).to(_ms_device)
+_ms_proc = AutoProcessor.from_pretrained(
+    _MS_MODEL_PATH,
+    local_files_only=True,
+    trust_remote_code=True,
+)
 print("[DEMO] ASR ready.")
 
 def _transcribe(audio_np: np.ndarray) -> str:
     inputs = _ms_proc(audio_np, return_tensors="pt", sampling_rate=SAMPLE_RATE)
-    duration = len(audio_np) / SAMPLE_RATE
-    max_new_tokens = max(int(duration * 5), 16)
-    generated_ids = _ms_model.generate(**inputs, max_new_tokens=max_new_tokens)
+    # Cast float tensors to model dtype; keep attention_mask as int
+    inputs = {
+        k: v.to(device=_ms_device, dtype=_ms_dtype if v.is_floating_point() else v.dtype)
+        for k, v in inputs.items()
+    }
+    duration       = len(audio_np) / SAMPLE_RATE
+    max_new_tokens = max(int(duration * 6.5), 16)
+    generated_ids  = _ms_model.generate(**inputs, max_new_tokens=max_new_tokens)
     return _ms_proc.decode(generated_ids[0], skip_special_tokens=True).strip()
 # ── Energy VAD (no extra deps — robust enough for controlled robotics env) ────
 def _vad_prob(chunk: np.ndarray) -> float:
@@ -201,7 +215,7 @@ from livekit.wakeword import WakeWordModel
 if not os.path.exists(WAKEWORD_MODEL):
     raise FileNotFoundError(
         f"Wake word model not found: {WAKEWORD_MODEL}\n"
-        "Copy hey_jarvis.onnx to the same directory as this script."
+        "Expected: hey_jarvis_kaggle.onnx in the same directory as this script."
     )
 
 print(f"[DEMO] Loading livekit wake word model: {WAKEWORD_MODEL} ...")
