@@ -139,7 +139,7 @@ _MS_MODEL_PATH = "./moonshine-streaming-medium"
 print(f"[DEMO] Loading Moonshine streaming-medium ({_ms_device}) ...")
 _ms_model = AutoModelForSpeechSeq2Seq.from_pretrained(
     _MS_MODEL_PATH,
-    torch_dtype=_ms_dtype,
+    dtype=_ms_dtype,
     local_files_only=True,
     trust_remote_code=True,
 ).to(_ms_device)
