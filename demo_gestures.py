@@ -45,7 +45,7 @@ MULTICAST_GROUP   = "239.168.123.161"
 MULTICAST_PORT    = 5555
 OWW_CHUNK         = 1280        # 80 ms at 16 kHz
 SAMPLE_RATE       = 16000
-WW_THRESHOLD      = 0.4        # from eval: optimal_threshold
+WW_THRESHOLD      = 0.3      # from eval: optimal_threshold
 WAKEWORD_MODEL    = "./hey_daksh.onnx"
 MAX_RECORD_SECONDS = 8.0      # absolute cap for VAD-based recording
 SPEECH_TIMEOUT_S  = 0.7       # silence after speech ends → stop recording
@@ -255,7 +255,9 @@ def do_hand_wave():
 
 COMMANDS = {
     "handshake":          (do_handshake, "Extend your hand for handshake"),
+    "shake hand":          (do_handshake, "Extend your hand for handshake"),
     "hand shake":         (do_handshake, "Extend your hand for handshake"),
+    "handshake":         (do_handshake, "Extend your hand for handshake"),
     "shake":              (do_handshake, "Extend your hand for handshake"),
     "give hand shake":    (do_handshake, "Extend your hand for handshake"),
     "give handshake":     (do_handshake, "Extend your hand for handshake"),
@@ -306,7 +308,8 @@ def dispatch(transcript: str) -> bool:
                 return True
 
     # Fuzzy: catch ASR typos ("foreward" → "forward", "handschake" → "handshake")
-    result = _fuzz_process.extractOne(t, list(COMMANDS.keys()), scorer=_fuzz.WRatio)
+    # result = _fuzz_process.extractOne(t, list(COMMANDS.keys()), scorer=_fuzz.WRatio)
+    result = _fuzz_process.extractOne(t, list(COMMANDS.keys()), scorer=_fuzz.ratio)
     if result and result[1] >= FUZZY_THRESHOLD:
         keyword, score = result[0], result[1]
         fn, response = COMMANDS[keyword]
@@ -352,7 +355,7 @@ while True:
             consec += 1
         else:
             consec = 0
-        if consec >= 2:
+        if consec >= 1:
             print(f"[DEMO] Wake word! score={score:.3f}")
             # Reset rolling buffer so stale audio doesn't re-trigger
             _ww_buffer[:] = 0.0
@@ -360,16 +363,9 @@ while True:
 
     drain_queue()
 
-    # LED: green flash → wake word detected
-    led(*LED_GREEN)
-    time.sleep(0.3)
-    led(*LED_OFF)
-    time.sleep(0.05)
-
-    # PHASE 2: record command with VAD endpoint detection
+    # PHASE 2: respond immediately, then record command
     say("Yes?", wait=0.5)
     drain_queue()   # flush TTS echo before listening
-    led(*LED_BLUE)
 
     _silence_limit = max(1, round(SPEECH_TIMEOUT_S * SAMPLE_RATE / OWW_CHUNK))
     frames = []
@@ -398,8 +394,6 @@ while True:
                     print(f"[DEMO] VAD: speech ended ({len(frames)} chunks)")
                     break
 
-    led(*LED_OFF)
-
     if not frames:
         transcript = ""
     else:
@@ -413,4 +407,4 @@ while True:
         continue
 
     if not dispatch(transcript):
-        say("Sorry, I did not understand. Try saying: handshake, move forward, or move backward.")
+        say("Sorry, I did not understand. Try again.")
