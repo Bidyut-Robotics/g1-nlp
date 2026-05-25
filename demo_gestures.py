@@ -43,10 +43,10 @@ import numpy as np
 NETWORK_INTERFACE = sys.argv[1] if len(sys.argv) > 1 else "eth0"
 MULTICAST_GROUP   = "239.168.123.161"
 MULTICAST_PORT    = 5555
-OWW_CHUNK         = 1280        # OpenWakeWord: 80 ms at 16 kHz
+OWW_CHUNK         = 1280        # 80 ms at 16 kHz
 SAMPLE_RATE       = 16000
-WW_THRESHOLD      = 0.6
-WW_KEY            = "alexa"
+WW_THRESHOLD      = 0.6        # from eval: optimal_threshold
+WAKEWORD_MODEL    = "./hey_jarvis_kaggle.onnx"
 MAX_RECORD_SECONDS = 8.0      # absolute cap for VAD-based recording
 SPEECH_TIMEOUT_S  = 0.7       # silence after speech ends → stop recording
 VAD_THRESHOLD     = 0.025     # normalized RMS energy threshold (above background ~0.012)
@@ -135,10 +135,10 @@ from transformers import MoonshineForConditionalGeneration, AutoProcessor
 
 print("[DEMO] Loading Moonshine Tiny (offline)...")
 _ms_model = MoonshineForConditionalGeneration.from_pretrained(
-    "./moonshine-tiny",  # local folder from download
+    "./moonshine-streaming-medium",  # local folder from download
     local_files_only=True,
 ).to("cpu")
-_ms_proc = AutoProcessor.from_pretrained("./moonshine-tiny", local_files_only=True)
+_ms_proc = AutoProcessor.from_pretrained("./moonshine-streaming-medium", local_files_only=True)
 print("[DEMO] ASR ready.")
 
 def _transcribe(audio_np: np.ndarray) -> str:
@@ -195,31 +195,19 @@ def _mic_thread():
 threading.Thread(target=_mic_thread, daemon=True).start()
 time.sleep(0.5)
 
-# ── Wake word model ───────────────────────────────────────────────────────────
-# openwakeword/vad.py imports onnxruntime unconditionally at module load time.
-# On Jetson Orin (ARM) onnxruntime crashes with "Unknown CPU vendor" assertion.
-# Stub it before the import so OWW falls through to tflite without ever calling it.
-import sys as _sys, types as _types
-if "onnxruntime" not in _sys.modules:
-    _ort_stub = _types.ModuleType("onnxruntime")
-    class _OrtInferenceSession:
-        def __init__(self, *a, **kw):
-            raise RuntimeError("onnxruntime stubbed — tflite path only on this platform")
-    _ort_stub.InferenceSession = _OrtInferenceSession
-    _sys.modules["onnxruntime"] = _ort_stub
+# ── Wake word model (livekit-wakeword) ────────────────────────────────────────
+from livekit.wakeword import WakeWordModel
 
-from openwakeword.model import Model as OWWModel
-import openwakeword.utils as _oww_utils
+if not os.path.exists(WAKEWORD_MODEL):
+    raise FileNotFoundError(
+        f"Wake word model not found: {WAKEWORD_MODEL}\n"
+        "Copy hey_jarvis.onnx to the same directory as this script."
+    )
 
-print("[DEMO] Checking OWW tflite models ...")
-try:
-    _oww_utils.download_models()
-    print("[DEMO] OWW models ready.")
-except Exception as _e:
-    print(f"[DEMO] OWW model download skipped: {_e}")
-
-print("[DEMO] Loading OpenWakeWord (alexa) ...")
-oww = OWWModel(wakeword_models=["alexa"], inference_framework="tflite")
+print(f"[DEMO] Loading livekit wake word model: {WAKEWORD_MODEL} ...")
+_ww_model = WakeWordModel(models=[WAKEWORD_MODEL])
+# Rolling 2-second buffer — livekit-wakeword is stateless, needs full window each call
+_ww_buffer = np.zeros(SAMPLE_RATE * 2, dtype=np.float32)
 print("[DEMO] Wake word ready.")
 
 # ── TTS ───────────────────────────────────────────────────────────────────────
@@ -313,7 +301,7 @@ def drain_queue():
             break
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
-print("\n[DEMO] Ready. Say 'Alexa' to activate.\n")
+print("\n[DEMO] Ready. Say 'Hey Jarvis' to activate.\n")
 
 while True:
     # PHASE 1: wait for wake word
@@ -321,9 +309,15 @@ while True:
     _log_counter = 0
     while True:
         chunk = _audio_q.get()
+
+        # Slide rolling buffer and append new chunk (converted to float32)
+        chunk_f32 = chunk.astype(np.float32) / 32768.0
+        _ww_buffer = np.roll(_ww_buffer, -len(chunk_f32))
+        _ww_buffer[-len(chunk_f32):] = chunk_f32
+
+        scores = _ww_model.predict(_ww_buffer)
+        score = max(scores.values()) if scores else 0.0
         energy = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
-        scores = oww.predict(chunk)
-        score = float(scores.get(WW_KEY, max(scores.values(), default=0.0)))
 
         _log_counter += 1
         if score >= 0.1 or _log_counter % 25 == 0:
@@ -335,7 +329,8 @@ while True:
             consec = 0
         if consec >= 2:
             print(f"[DEMO] Wake word! score={score:.3f}")
-            oww.reset()
+            # Reset rolling buffer so stale audio doesn't re-trigger
+            _ww_buffer[:] = 0.0
             break
 
     drain_queue()
