@@ -46,7 +46,7 @@ MULTICAST_PORT    = 5555
 OWW_CHUNK         = 1280        # 80 ms at 16 kHz
 SAMPLE_RATE       = 16000
 WW_THRESHOLD      = 0.6        # from eval: optimal_threshold
-WAKEWORD_MODEL    = "./hey_jarvis_kaggle.onnx"
+WAKEWORD_MODEL    = "./hey_daksh.onnx"
 MAX_RECORD_SECONDS = 8.0      # absolute cap for VAD-based recording
 SPEECH_TIMEOUT_S  = 0.7       # silence after speech ends → stop recording
 VAD_THRESHOLD     = 0.025     # normalized RMS energy threshold (above background ~0.012)
@@ -215,7 +215,7 @@ from livekit.wakeword import WakeWordModel
 if not os.path.exists(WAKEWORD_MODEL):
     raise FileNotFoundError(
         f"Wake word model not found: {WAKEWORD_MODEL}\n"
-        "Expected: hey_jarvis_kaggle.onnx in the same directory as this script."
+        "Expected: hey_daksh.onnx in the same directory as this script."
     )
 
 print(f"[DEMO] Loading livekit wake word model: {WAKEWORD_MODEL} ...")
@@ -315,7 +315,7 @@ def drain_queue():
             break
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
-print("\n[DEMO] Ready. Say 'Hey Jarvis' to activate.\n")
+print("\n[DEMO] Ready. Say 'Hey Daksh' to activate.\n")
 
 while True:
     # PHASE 1: wait for wake word
