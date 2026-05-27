@@ -3,8 +3,10 @@ import asyncio
 import datetime
 from typing import TypedDict, List, Dict, Any, Awaitable, Callable, Optional
 from core.interfaces import ILLMProvider
-from core.schemas import Utterance, NLPActionPayload
+from core.schemas import Utterance, NLPActionPayload, ActionType
 from core.config import load_app_config
+from core.prompt_builder import PromptBuilder
+from services.knowledge.kb_client import kb_client
 
 # ─── Week 1 feature flags (set to True to re-enable in Week 2+) ──────────────
 WEEK1_PERSONA_ENABLED = False
@@ -49,6 +51,16 @@ class DialogueManager:
         self.robot_location = ri.get("location", "this office")
         self.robot_role = ri.get("role", "office assistant robot")
 
+        self.prompt_builder = PromptBuilder(
+            robot_name=self.robot_name,
+            robot_company=self.robot_company,
+            robot_location=self.robot_location,
+            robot_role=self.robot_role,
+        )
+        # Push a fresh system prompt to the LLM on startup
+        if hasattr(self.llm, "set_system_prompt"):
+            self.llm.set_system_prompt(self.prompt_builder.build_system())
+
     def get_or_create_session(self, session_id: str) -> AgentState:
         if session_id not in self.sessions:
             self.sessions[session_id] = {
@@ -60,9 +72,14 @@ class DialogueManager:
                 "exit_intent": False,
             }
         else:
-            # Reset exit_intent at the start of each turn
             self.sessions[session_id]["exit_intent"] = False
         return self.sessions[session_id]
+
+    def reset_session(self, session_id: str) -> None:
+        """Clear conversation history after barge-in so LLM answers fresh."""
+        if session_id in self.sessions:
+            self.sessions[session_id]["messages"] = []
+            self.sessions[session_id]["exit_intent"] = False
 
     async def process_utterance(
         self,
@@ -79,12 +96,13 @@ class DialogueManager:
         
         # 1. FAST PATH: Check for simple queries (bypass LLM entirely)
         if self._is_simple_query(utterance.text):
+            state["extracted_actions"] = []   # handler may append gesture actions
             response_content = self._handle_simple_query(utterance.text, state)
             state["messages"].append({"role": "user", "content": utterance.text})
             state["messages"].append({"role": "assistant", "content": response_content})
             state["response_text"] = response_content
-            state["extracted_actions"] = []
-            # exit_intent is set inside _handle_simple_query for stop/bye patterns
+            if on_response_sentence:
+                await on_response_sentence(response_content)
             return state
         
         # 2. Personalization: Inject Persona Profile if recognized (async)
@@ -112,6 +130,13 @@ class DialogueManager:
             except Exception as e:
                 print(f"[SYSTEM] Calendar lookup failed: {e}")
         
+        # 4b. Knowledge base lookup (non-blocking, 500ms max)
+        kb_docs = await kb_client.retrieve(utterance.text)
+        if kb_docs:
+            state["context"]["_kb_memory"] = "\n\n---\n\n".join(kb_docs)
+        else:
+            state["context"].pop("_kb_memory", None)
+
         # 5. SINGLE LLM PASS: Build prompt with all context + tool results injected upfront
         prompt = self._build_prompt(state, tool_results)
         response_content = await self._stream_response(
@@ -135,10 +160,11 @@ class DialogueManager:
 
         # 7. Action Extraction (Gestures, Navigation)
         actions = await self.llm.extract_actions(response_content)
-        
+        gesture_actions = self._extract_gesture_actions(response_content)
+
         # 8. Update State
-        state["response_text"] = self._strip_actions(response_content)
-        state["extracted_actions"] = actions
+        state["response_text"] = self._strip_tags(response_content)
+        state["extracted_actions"] = actions + gesture_actions
         state["messages"].append({"role": "assistant", "content": state["response_text"]})
         
         # OPTIMIZATION: Reduce context window from 10 to 5 turns for faster processing
@@ -148,64 +174,51 @@ class DialogueManager:
         return state
 
     def _build_prompt(self, state: AgentState, tool_results: Dict[str, str] = None) -> str:
+        """
+        Builds the user-turn prompt (history + question).
+        System prompt is managed separately via PromptBuilder and pushed to the LLM.
+        To inject context (facial recog, context engine, RAG), update the system prompt:
+            self.llm.set_system_prompt(self.prompt_builder.build_system(context={...}))
+        """
         if tool_results is None:
             tool_results = {}
 
-        # Extract the last user message to give the model explicit focus
+        # Extract last user question
         user_question = ""
         for m in reversed(state["messages"]):
             if m["role"] == "user":
                 user_question = m["content"]
                 break
 
-        # Build conversation history (excluding the last user turn — shown separately)
-        history_lines = []
-        pending_user = True  # skip the last user message from history
+        # History: all messages except the last user turn
+        history = []
+        pending_user = True
         for m in reversed(state["messages"]):
             if pending_user and m["role"] == "user":
                 pending_user = False
                 continue
-            history_lines.insert(0, f"{m['role'].upper()}: {m['content']}")
-        history_str = "\n".join(history_lines) if history_lines else "(new conversation)"
+            history.insert(0, m)
 
-        # Build context section
-        context_parts = []
+        # Rebuild system prompt with any runtime context (KB, persona, calendar)
+        runtime_context = {}
         if WEEK1_PERSONA_ENABLED:
-            persona = state["context"].get("person_profile", {})
+            persona = state["context"].get("person_profile")
             if persona:
-                context_parts.append(
-                    f"User: {persona.get('name', 'Unknown')} | "
-                    f"Role: {persona.get('role', 'Guest')} | "
-                    f"Pref: {persona.get('pref', 'None')}"
-                )
+                runtime_context["person"] = persona
         if WEEK1_CALENDAR_ENABLED and tool_results.get("calendar"):
-            context_parts.append(f"\n[CALENDAR INFORMATION]\n{tool_results['calendar']}")
+            runtime_context["memory"] = tool_results["calendar"]
 
-        context_block = "\n".join(context_parts) if context_parts else ""
+        # Knowledge base chunks take priority over calendar for memory slot
+        kb_memory = state["context"].get("_kb_memory")
+        if kb_memory:
+            runtime_context["memory"] = kb_memory
 
-        return f"""You are Jarvis, a helpful humanoid robot assistant. Answer questions accurately and concisely.
+        if runtime_context and hasattr(self.llm, "set_system_prompt"):
+            self.llm.set_system_prompt(
+                self.prompt_builder.build_system(context=runtime_context)
+            )
 
-FACTS ABOUT YOU (always use these, never contradict them):
-- Your name is {self.robot_name}
-- You were built by {self.robot_company}
-- You are deployed at: {self.robot_location}
-- Your role: {self.robot_role}
-
-RULES:
-- Answer the CURRENT QUESTION directly. Do not repeat greetings.
-- Give a specific, factual answer in 1-3 sentences.
-- Do not start with "Hello", "Hi", "Certainly", "Of course", or filler phrases.
-- Do not make up facts, distances, place names, or technical specifications.
-- If uncertain, say 'I'm not sure about that' or 'I don't have that information'.
-- Speak naturally, as if talking to a person face-to-face.
-
-{context_block}
-CONVERSATION HISTORY:
-{history_str}
-
-CURRENT QUESTION: {user_question}
-
-ANSWER:"""
+        return self.prompt_builder.build_user_turn(user_question, history)
 
 
 
@@ -235,23 +248,44 @@ ANSWER:"""
 
                 sentence = match.group(1).strip()
                 sentence_buffer = sentence_buffer[match.end():]
-                visible_sentence = self._strip_actions(sentence).replace("[TOOL: get_calendar_schedule]", "").strip().strip('"')
+                visible_sentence = self._strip_tags(sentence).replace("[TOOL: get_calendar_schedule]", "").strip().strip('"')
                 if visible_sentence:
                     await on_response_sentence(visible_sentence)
 
         print()
 
         if on_response_sentence:
-            tail = self._strip_actions(sentence_buffer).replace("[TOOL: get_calendar_schedule]", "").strip().strip('"')
+            tail = self._strip_tags(sentence_buffer).replace("[TOOL: get_calendar_schedule]", "").strip().strip('"')
             if tail:
                 await on_response_sentence(tail)
 
         return response_content
 
     def _strip_actions(self, text: str) -> str:
-        """Removes the [ACTION: ...] tags from the text shown to the user."""
-        import re
+        """Removes [ACTION: ...] tags from text shown to the user."""
         return re.sub(r"\[ACTION:\s*.*?\]", "", text).strip()
+
+    def _strip_tags(self, text: str) -> str:
+        """Removes both [ACTION: ...] and [GESTURE: ...] tags from visible text."""
+        text = re.sub(r"\[ACTION:\s*.*?\]", "", text)
+        text = re.sub(r"\[GESTURE:\s*\w+\]", "", text)
+        return text.strip()
+
+    def _extract_gesture_actions(self, text: str) -> list:
+        """
+        Parse [GESTURE: gesture_name] tags emitted by the LLM and return
+        NLPActionPayload objects so the pipeline can execute them.
+        """
+        actions = []
+        for match in re.finditer(r"\[GESTURE:\s*(\w+)\]", text):
+            gesture_name = match.group(1).lower()
+            actions.append(
+                NLPActionPayload(
+                    action_type=ActionType.GESTURE,
+                    params={"gesture_name": gesture_name},
+                )
+            )
+        return actions
 
     def _is_schedule_query(self, text: str) -> bool:
         lowered = text.lower()
@@ -273,11 +307,24 @@ ANSWER:"""
         keywords = ["move", "go to", "navigate", "escort", "take me", "lead me", "bring me"]
         return any(keyword in lowered for keyword in keywords)
 
+    _DEFINITION_PREFIXES = (
+        "what is the meaning of", "what does", "mean", "explain", "define",
+        "definition of", "what is a", "tell me about", "what is the",
+    )
+
+    def _is_definition_question(self, lowered: str) -> bool:
+        """Return True if the query is asking for an explanation/meaning, not a command."""
+        return any(p in lowered for p in self._DEFINITION_PREFIXES)
+
     def _is_simple_query(self, text: str) -> bool:
         """
         Detect simple factual queries that bypass the LLM entirely.
         """
-        lowered = text.lower().strip()
+        lowered = re.sub(r'[^\w\s]', '', text.lower()).strip()
+
+        # If it's a definition/explanation question, always route to LLM
+        if self._is_definition_question(lowered):
+            return False
 
         fast_patterns = [
             # Time
@@ -301,14 +348,20 @@ ANSWER:"""
             # Stop
             "stop", "never mind", "nevermind", "cancel", "dismiss",
             "quit", "exit", "bye", "goodbye", "see you",
+            # Handshake
+            "shake hand", "shake my hand", "handshake", "want to shake",
+            "can you shake", "hand shake", "give hand", "give handshake",
+            # Movement
+            "move forward", "go forward", "come forward", "walk forward", "come here", "come closer",
+            "move backward", "go back", "move back", "walk back", "step back", "go backward",
         ]
         if any(p in lowered for p in fast_patterns):
             return True
 
         # Greetings / acks (exact match)
         exact_matches = {
-            "hello", "hi there", "hey", "good morning", "good afternoon", "good evening",
-            "thanks", "thank you", "ok", "okay", "yes", "no", "nope", "got it", "alright",
+            "hello", "hi", "hi there", "hey", "good morning", "good afternoon", "good evening",
+            "thanks", "thank you", "ok", "okay", "yes", "no", "nope", "got it", "alright", "hi jarvis"
         }
         if lowered in exact_matches:
             return True
@@ -317,7 +370,7 @@ ANSWER:"""
     
     def _handle_simple_query(self, text: str, state: AgentState) -> str:
         """Handle simple factual queries without LLM."""
-        lowered = text.lower().strip()
+        lowered = re.sub(r'[^\w\s]', '', text.lower()).strip()
         now = datetime.datetime.now()
 
         # Time
@@ -333,12 +386,15 @@ ANSWER:"""
             return f"We are at {self.robot_location}."
 
         # Company / creator
-        if any(p in lowered for p in ["which company", "what company", "who made you", "who built you", "who created you", "which organization", "what organization", "who do you work for", "who are you built by"]):
-            return f"I was built by {self.robot_company}."
+        if any(p in lowered for p in ["which company", "what company", "who made you", "who built you", "who created you", "which organization", "what organization", "who are you built by"]):
+            return "I don't have information about who built me."
+
+        if any(p in lowered for p in ["who do you work for", "where do you work", "which company do you work"]):
+            return f"I work at {self.robot_company}."
 
         # Identity
         if any(p in lowered for p in ["who are you", "what are you", "what's your name", "what is your name", "your name", "who is jarvis", "tell me about yourself"]):
-            return f"I'm {self.robot_name}, a {self.robot_role} built by {self.robot_company}."
+            return f"I'm {self.robot_name}, a {self.robot_role} working at {self.robot_company}."
 
         # Help / capabilities
         if any(p in lowered for p in ["what can you do", "help me", "help", "what do you do", "your capabilities"]):
@@ -347,16 +403,50 @@ ANSWER:"""
         # Stop / dismiss — set exit_intent so the main loop can break
         if any(p in lowered for p in ["stop", "never mind", "nevermind", "cancel", "dismiss", "quit", "exit", "bye", "goodbye", "see you"]):
             state["exit_intent"] = True
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "wave_goodbye"})
+            )
             return "Alright, goodbye! I'll be here if you need anything."
 
+        # Handshake (explicit request)
+        if any(p in lowered for p in ["shake hand", "shake my hand", "handshake", "want to shake", "can you shake", "can you shake my hand", "give handshake", "hand shake", "give hand"]):
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "shake_hand"})
+            )
+            return "Of course! Please extend your hand."
+
+        if any(p in lowered for p in ["move forward", "go forward", "come forward", "walk forward", "come here", "come closer"]):
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "move_forward"})
+            )
+            return "Moving forward."
+
+        if any(p in lowered for p in ["move backward", "go back", "move back", "walk back", "step back", "go backward"]):
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "move_backward"})
+            )
+            return "Moving backward."
+
         # Greetings
-        if lowered in {"hello", "hi there", "hey"}:
+        if lowered in {"hello", "hi", "hi there", "hey", "hi jarvis"}:
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "wave_hello"})
+            )
             return f"Hello! How can I help you?"
         if "good morning" in lowered:
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "wave_hello"})
+            )
             return "Good morning! What can I do for you?"
         if "good afternoon" in lowered:
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "wave_hello"})
+            )
             return "Good afternoon! How can I help?"
         if "good evening" in lowered:
+            state["extracted_actions"].append(
+                NLPActionPayload(action_type=ActionType.GESTURE, params={"gesture_name": "wave_hello"})
+            )
             return "Good evening! What do you need?"
 
         # Acknowledgements

@@ -58,3 +58,5 @@ Thumbs.db
 .codex
 .system_generated/
 docs/
+
+cpp/build/

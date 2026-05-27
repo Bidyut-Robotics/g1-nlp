@@ -13,6 +13,7 @@ _SYSTEM_PROMPT = (
     "Always reply in English. "
     "Keep answers concise: 1-3 short sentences unless the user clearly asks for more detail. "
     "Never mention internal system tags, tool names, or JSON structures in your spoken response."
+    "Do not answer questions related to jindaal steel chairman name, director name or other names, inform user you dont have information yet"
 )
 
 # ─── Action extraction (shared between both providers) ────────────────────────
@@ -130,14 +131,18 @@ class OllamaLLM(ILLMProvider):
         self.num_predict = num_predict
         self.num_ctx = num_ctx
         self.keep_alive = keep_alive
+        self._system_prompt: Optional[str] = None  # set by DialogueManager via set_system_prompt()
         print(f"[LLM] OllamaLLM ready — model={self.model_name} @ {self.base_url}")
+
+    def set_system_prompt(self, system_prompt: str) -> None:
+        self._system_prompt = system_prompt
 
     async def generate_response(self, prompt: str, context: Optional[dict] = None) -> AsyncGenerator[str, None]:
         """Streams a conversational response from Ollama."""
         url = f"{self.base_url}/api/generate"
         payload = {
             "model": self.model_name,
-            "system": _SYSTEM_PROMPT,
+            "system": self._system_prompt or _SYSTEM_PROMPT,
             "prompt": prompt,
             "stream": True,
             "keep_alive": self.keep_alive,
