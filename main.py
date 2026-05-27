@@ -334,6 +334,7 @@ class LiveAudioPipeline:
 
         self.wakeword_threshold = float(os.getenv("WAKEWORD_THRESHOLD", ww_cfg.get("threshold", "0.5")))
         self.wakeword_display = os.getenv("WAKEWORD_DISPLAY", ww_cfg.get("display_name", "Jarvis"))
+        self.wakeword_min_consec = int(os.getenv("WAKEWORD_MIN_CONSEC", str(ww_cfg.get("min_consec", 2))))
 
         # ── Silero VAD ────────────────────────────────────────────────────────
         print("[VAD] Loading Silero VAD...")
@@ -1005,7 +1006,7 @@ class LiveAudioPipeline:
                         else:
                             _ww_consec = 0
 
-                        if _ww_consec >= 2:
+                        if _ww_consec >= self.wakeword_min_consec:
                             self._wake_time = time.time()
                             print(f"[{self.wakeword_display}] Wake word detected ({score:.3f}).")
                             break

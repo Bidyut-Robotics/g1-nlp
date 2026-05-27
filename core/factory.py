@@ -24,7 +24,8 @@ class ServiceFactory:
         device = os.getenv("ASR_DEVICE", cfg.get("device", "cpu"))
 
         if mode == "parakeet":
-            return ParakeetASR(device=device)
+            model_name = os.getenv("PARAKEET_MODEL", cfg.get("model_name", "nvidia/parakeet-tdt-0.6b-v2"))
+            return ParakeetASR(device=device, model_name=model_name)
         
         # default: whisper
         model_size = os.getenv("ASR_MODEL_SIZE", cfg.get("model_size", "tiny"))

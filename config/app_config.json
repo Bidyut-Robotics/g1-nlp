@@ -53,14 +53,16 @@
 
   "asr": {
     "mode": "parakeet",
-    "device": "cuda"
+    "device": "cuda",
+    "model_name": "nvidia/parakeet-tdt-0.6b-v2"
   },
 
   "wake_word": {
     "backend": "livekit",
     "model": "models/hey_jarvis_kaggle.onnx",
     "display_name": "Jarvis",
-    "threshold": 0.5
+    "threshold": 0.35,
+    "min_consec": 1
   },
 
   "knowledge_base": {

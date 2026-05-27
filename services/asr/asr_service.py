@@ -104,7 +104,7 @@ class ParakeetASR(IASRProvider):
     Recommended for AGX Thor / any Jetson with JetPack 6 + CUDA 12.
     """
 
-    def __init__(self, device: str = "cuda"):
+    def __init__(self, device: str = "cuda", model_name: str = "nvidia/parakeet-tdt-0.6b-v2"):
         import os
         from nano_parakeet import from_pretrained
         self._device = device
@@ -112,12 +112,12 @@ class ParakeetASR(IASRProvider):
         # Try cache-only first; fall back to download on first run, then lock offline
         os.environ["HF_HUB_OFFLINE"] = "1"
         try:
-            print(f"[ASR] Loading Parakeet TDT 0.6B-v3 from cache ...")
-            self._model = from_pretrained()
+            print(f"[ASR] Loading {model_name} from cache ...")
+            self._model = from_pretrained(model_name=model_name)
         except Exception:
-            print("[ASR] Cache miss — downloading Parakeet (~1.1 GB, one-time) ...")
+            print(f"[ASR] Cache miss — downloading {model_name} (~1.1 GB, one-time) ...")
             del os.environ["HF_HUB_OFFLINE"]
-            self._model = from_pretrained()
+            self._model = from_pretrained(model_name=model_name)
             os.environ["HF_HUB_OFFLINE"] = "1"
             print("[ASR] Download complete. Will use cache on future runs.")
 
