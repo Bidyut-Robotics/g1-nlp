@@ -52,9 +52,8 @@
   },
 
   "asr": {
-    "model_size": "medium",
-    "device": "cuda",
-    "compute_type": "float16"
+    "mode": "parakeet",
+    "device": "cuda"
   },
 
   "wake_word": {

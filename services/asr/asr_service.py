@@ -96,3 +96,50 @@ class FasterWhisperASR(IASRProvider):
 
     async def transcribe(self, audio_data: np.ndarray) -> Utterance:
         return await asyncio.to_thread(self.transcribe_sync, audio_data)
+
+class ParakeetASR(IASRProvider):
+    """
+    On-device ASR using nano-parakeet (Parakeet TDT 0.6B-v3).
+    Pure PyTorch, no NeMo/onnxruntime. English-only — no hallucination filter needed.
+    Recommended for AGX Thor / any Jetson with JetPack 6 + CUDA 12.
+    """
+
+    def __init__(self, device: str = "cuda"):
+        import os
+        from nano_parakeet import from_pretrained
+        self._device = device
+
+        # Try cache-only first; fall back to download on first run, then lock offline
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            print(f"[ASR] Loading Parakeet TDT 0.6B-v3 from cache ...")
+            self._model = from_pretrained()
+        except Exception:
+            print("[ASR] Cache miss — downloading Parakeet (~1.1 GB, one-time) ...")
+            del os.environ["HF_HUB_OFFLINE"]
+            self._model = from_pretrained()
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            print("[ASR] Download complete. Will use cache on future runs.")
+
+        print("[ASR] Parakeet ready.")
+        self._prewarm()
+
+    def _prewarm(self):
+        try:
+            self._model.transcribe(np.zeros(8000, dtype=np.float32))
+            print("[ASR] Pre-warm complete.")
+        except Exception as e:
+            print(f"[ASR] Pre-warm skipped: {e}")
+
+    def transcribe_sync(self, audio_data: np.ndarray) -> Utterance:
+        text = self._model.transcribe(audio_data).strip()
+        return Utterance(
+            text=text,
+            language="English",
+            confidence=1.0,
+            timestamp=time.time(),
+            id=f"asr_{int(time.time() * 1000)}",
+        )
+
+    async def transcribe(self, audio_data: np.ndarray) -> Utterance:
+        return await asyncio.to_thread(self.transcribe_sync, audio_data)
