@@ -46,7 +46,7 @@
 
   "tts": {
     "mode": "g1_bridge",
-    "model_path": "models/en_US-lessac-medium.onnx",
+    "model_path": "models/en_US-ryan-medium.onnx",
     "hindi_model_path": "models/hi_IN-priyamvada-medium.onnx",
     "player": "aplay"
   },
@@ -58,9 +58,10 @@
   },
 
   "wake_word": {
-    "model": "hey_jarvis",
+    "backend": "livekit",
+    "model": "models/hey_jarvis_kaggle.onnx",
     "display_name": "Jarvis",
-    "threshold": 0.3
+    "threshold": 0.5
   },
 
   "knowledge_base": {

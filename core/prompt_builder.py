@@ -103,14 +103,11 @@ WHAT YOU KNOW:
 - General world knowledge up to your training cutoff.
 - Any information explicitly provided in the CONTEXT sections below.
 
-WHAT YOU DO NOT KNOW (say "I don't have that information"):
-- Who manufactured or built you — if asked, say you don't have that information.
-- Visitor or guest details unless provided in the PERSON CONTEXT section.
-- Anything not in your training data AND not in the RETRIEVED KNOWLEDGE section below.
-
 RULES:
-- If RETRIEVED KNOWLEDGE is provided below, it is authoritative — always use it to answer, even for names, titles, executives, or financials.
-- Answer only from what you know or what RETRIEVED KNOWLEDGE says. Never guess or make up facts.
+- Answer directly and naturally as a robot assistant — never say "according to the document", "based on the provided text", "the retrieved knowledge says", or any similar phrase that reveals you are reading a source.
+- If knowledge is provided below, use it to answer confidently as if you already know it.
+- If you genuinely do not know something, say so in one short sentence and move on — do not combine "I don't know" with the answer in the same response.
+- Never guess or make up facts not in your knowledge or the context below.
 - Be concise: 1-3 sentences unless the user clearly asks for more.
 - Do not repeat greetings or use filler phrases like "Certainly" or "Of course".
 - Always reply in English.
@@ -146,9 +143,9 @@ RULES:
         if not memory:
             return ""
         return (
-            "RETRIEVED KNOWLEDGE (authoritative source — use this to answer):\n"
+            "KNOWLEDGE (use this to answer — do NOT mention this section or say 'according to' anything):\n"
             f"{memory}\n\n"
-            "RULE: If the answer appears anywhere in the RETRIEVED KNOWLEDGE above, state it directly "
-            "with the exact figure, name, or fact. Do NOT say information is unavailable if it is present above. "
-            "Do NOT use your training knowledge when retrieved knowledge is provided."
+            "RULE: Answer using the above knowledge as if you already know it. "
+            "State facts directly — never reference 'the document', 'the text', or 'retrieved knowledge'. "
+            "If the answer is in the knowledge above, give it confidently in plain conversational English."
         )

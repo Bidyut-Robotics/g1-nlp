@@ -36,6 +36,33 @@ import sounddevice as sd
 import torch
 from openwakeword.model import Model
 
+
+class LivekitWakeWord:
+    """
+    Thin wrapper around livekit.wakeword.WakeWordModel that matches the
+    predict()/reset() interface of OpenWakeWord.
+
+    livekit's model is stateless — it expects a full ~2s audio window each
+    call. This wrapper maintains the rolling buffer internally so PHASE 1
+    can feed chunks exactly as before.
+    """
+
+    def __init__(self, model_path: str):
+        from livekit.wakeword import WakeWordModel
+        self._model = WakeWordModel(models=[model_path])
+        self._buf = np.zeros(WAKEWORD_SAMPLE_RATE * 2, dtype=np.float32)
+        model_name = pathlib.Path(model_path).stem
+        self.models = {model_name: None}
+
+    def predict(self, chunk: np.ndarray) -> dict:
+        chunk_f32 = chunk.astype(np.float32) / 32768.0 if chunk.dtype == np.int16 else chunk.astype(np.float32)
+        self._buf = np.roll(self._buf, -len(chunk_f32))
+        self._buf[-len(chunk_f32):] = chunk_f32
+        return self._model.predict(self._buf)
+
+    def reset(self):
+        self._buf[:] = 0.0
+
 from core.config import get_tts_config, get_hardware_config, load_app_config
 from core.factory import ServiceFactory
 from core.schemas import ActionType
@@ -269,26 +296,36 @@ class LiveAudioPipeline:
         print(f"[HARDWARE] mode={self.hardware_mode.upper()}, mic_device={self.device or 'system default'}")
 
         # ── Wake-word model ───────────────────────────────────────────────────
-        self.wakeword_name = os.getenv("WAKEWORD_MODEL", ww_cfg.get("model", "hey_jarvis_v0.1"))
-        self.wakeword_key = pathlib.Path(self.wakeword_name).stem.replace(" ", "_")
+        ww_backend = os.getenv("WAKEWORD_BACKEND", ww_cfg.get("backend", "oww")).lower()
 
         try:
-            if "/" in self.wakeword_name or self.wakeword_name.endswith(".onnx"):
-                model_path = os.path.abspath(self.wakeword_name)
-                print(f"[WAKEWORD] Loading custom model from path: {model_path}")
+            if ww_backend == "livekit":
+                model_path = os.getenv("WAKEWORD_MODEL", ww_cfg.get("model", "models/hey_jarvis_kaggle.onnx"))
+                model_path = os.path.abspath(model_path)
                 if not os.path.exists(model_path):
-                    raise FileNotFoundError(f"Wake-word model file not found at: {model_path}")
-                model_arg = [model_path]
+                    raise FileNotFoundError(f"Wake-word model not found: {model_path}")
+                print(f"[WAKEWORD] Loading livekit model: {model_path}")
+                self.wakeword_model = LivekitWakeWord(model_path=model_path)
+                self.wakeword_key = pathlib.Path(model_path).stem
+                self.wakeword_name = model_path
             else:
-                print(f"[WAKEWORD] Initialized with standard name: '{self.wakeword_name}'")
-                model_arg = [self.wakeword_name]
+                self.wakeword_name = os.getenv("WAKEWORD_MODEL", ww_cfg.get("model", "hey_jarvis_v0.1"))
+                self.wakeword_key = pathlib.Path(self.wakeword_name).stem.replace(" ", "_")
 
-            try:
-                # openwakeword >= 0.5 uses wakeword_models
-                self.wakeword_model = Model(wakeword_models=model_arg, inference_framework="onnx")
-            except TypeError:
-                # older versions use wakeword_model_paths
-                self.wakeword_model = Model(wakeword_model_paths=model_arg, inference_framework="onnx")
+                if "/" in self.wakeword_name or self.wakeword_name.endswith(".onnx"):
+                    model_path = os.path.abspath(self.wakeword_name)
+                    print(f"[WAKEWORD] Loading custom model from path: {model_path}")
+                    if not os.path.exists(model_path):
+                        raise FileNotFoundError(f"Wake-word model file not found at: {model_path}")
+                    model_arg = [model_path]
+                else:
+                    print(f"[WAKEWORD] Initialized with standard name: '{self.wakeword_name}'")
+                    model_arg = [self.wakeword_name]
+
+                try:
+                    self.wakeword_model = Model(wakeword_models=model_arg, inference_framework="onnx")
+                except TypeError:
+                    self.wakeword_model = Model(wakeword_model_paths=model_arg, inference_framework="onnx")
 
             print(f"[WAKEWORD] Available keys in model: {list(self.wakeword_model.models.keys())}")
         except Exception as e:
