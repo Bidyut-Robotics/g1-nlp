@@ -99,40 +99,39 @@ class FasterWhisperASR(IASRProvider):
 
 class ParakeetASR(IASRProvider):
     """
-    On-device ASR using nano-parakeet (Parakeet TDT 0.6B-v3).
-    Pure PyTorch, no NeMo/onnxruntime. English-only — no hallucination filter needed.
+    On-device ASR using NeMo Parakeet TDT.
     Recommended for AGX Thor / any Jetson with JetPack 6 + CUDA 12.
     """
 
     def __init__(self, device: str = "cuda", model_name: str = "nvidia/parakeet-tdt-0.6b-v2"):
-        import os
-        from nano_parakeet import from_pretrained
-        self._device = device
+        import logging
+        import nemo.collections.asr as nemo_asr
 
-        # Try cache-only first; fall back to download on first run, then lock offline
-        os.environ["HF_HUB_OFFLINE"] = "1"
-        try:
-            print(f"[ASR] Loading {model_name} from cache ...")
-            self._model = from_pretrained(model_name=model_name)
-        except Exception:
-            print(f"[ASR] Cache miss — downloading {model_name} (~1.1 GB, one-time) ...")
-            del os.environ["HF_HUB_OFFLINE"]
-            self._model = from_pretrained(model_name=model_name)
-            os.environ["HF_HUB_OFFLINE"] = "1"
-            print("[ASR] Download complete. Will use cache on future runs.")
+        self._device = device
+        logging.getLogger("nemo_logger").setLevel(logging.ERROR)
+
+        print(f"[ASR] Loading {model_name} via NeMo...")
+        self._model = nemo_asr.models.ASRModel.from_pretrained(model_name=model_name)
+        self._model.eval()
+        if device == "cuda":
+            self._model = self._model.cuda()
 
         print("[ASR] Parakeet ready.")
         self._prewarm()
 
     def _prewarm(self):
         try:
-            self._model.transcribe(np.zeros(8000, dtype=np.float32))
+            self._model.transcribe([np.zeros(8000, dtype=np.float32)], batch_size=1)
             print("[ASR] Pre-warm complete.")
         except Exception as e:
             print(f"[ASR] Pre-warm skipped: {e}")
 
     def transcribe_sync(self, audio_data: np.ndarray) -> Utterance:
-        text = self._model.transcribe(audio_data).strip()
+        output = self._model.transcribe([audio_data], batch_size=1)
+        text = (output[0].text if hasattr(output[0], "text") else str(output[0])).strip()
+        if not _is_valid_english(text):
+            print(f"[ASR] Rejected hallucination: '{text[:60]}'")
+            text = ""
         return Utterance(
             text=text,
             language="English",
