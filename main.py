@@ -53,11 +53,18 @@ class LivekitWakeWord:
         self._buf = np.zeros(WAKEWORD_SAMPLE_RATE * 2, dtype=np.float32)
         model_name = pathlib.Path(model_path).stem
         self.models = {model_name: None}
+        self._model_name = model_name
+        # Skip scoring until the rolling buffer is filled with real audio (~2s).
+        # Without this, the zeros+audio transition at startup scores spuriously high.
+        self._warmup_remaining = (WAKEWORD_SAMPLE_RATE * 2) // WAKEWORD_BLOCK_SIZE + 1
 
     def predict(self, chunk: np.ndarray) -> dict:
         chunk_f32 = chunk.astype(np.float32) / 32768.0 if chunk.dtype == np.int16 else chunk.astype(np.float32)
         self._buf = np.roll(self._buf, -len(chunk_f32))
         self._buf[-len(chunk_f32):] = chunk_f32
+        if self._warmup_remaining > 0:
+            self._warmup_remaining -= 1
+            return {self._model_name: 0.0}
         return self._model.predict(self._buf)
 
     def reset(self):
