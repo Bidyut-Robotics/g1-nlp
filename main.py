@@ -85,7 +85,7 @@ WAKEWORD_BLOCK_SIZE = 1280          # ~80 ms per chunk at 16kHz
 # ── Command capture timing ────────────────────────────────────────────────────
 MAX_COMMAND_SECONDS = 10.0          # Hard timeout: stop listening after this
 MIN_COMMAND_SECONDS = 0.4           # Minimum before we check for silence
-SILENCE_TIMEOUT_SECONDS = 0.6       # Silence after speech = end of utterance
+SILENCE_TIMEOUT_SECONDS = 0.8       # Silence after speech = end of utterance
 
 # ── VAD / energy thresholds ───────────────────────────────────────────────────
 ENERGY_THRESHOLD = 0.010            # Below this → silence
@@ -583,7 +583,7 @@ class LiveAudioPipeline:
         Latency: one chunk duration (~80ms) after user starts speaking.
         If the robot starts interrupting itself, raise BARGE_IN_MIN_MIC_ENERGY.
         """
-        consecutive_above = 0  # require 2 chunks in a row to avoid single-spike false triggers
+        consecutive_above = 0  # require N chunks in a row to avoid false triggers
         while True:
             try:
                 chunk = self._barge_in_queue.get_nowait()
@@ -615,12 +615,15 @@ class LiveAudioPipeline:
                 self._noise_floor * BARGE_IN_SNR_RATIO,
                 BARGE_IN_MIN_MIC_ENERGY,
             )
-            if mic_energy >= dynamic_threshold:
+            # Two-stage gate: energy pre-filter + Silero VAD confirmation.
+            # Energy alone can't distinguish user speech from background chatter;
+            # Silero adds neural confirmation before incrementing the counter.
+            if mic_energy >= dynamic_threshold and self._vad_is_speech(chunk):
                 consecutive_above += 1
             else:
                 consecutive_above = 0
 
-            if consecutive_above >= 2 and not self.interrupt_event.is_set():
+            if consecutive_above >= 4 and not self.interrupt_event.is_set():
                 self._debug(
                     f"[BARGE-IN] Energy trigger mic={mic_energy:.3f} "
                     f"threshold={dynamic_threshold:.3f} (floor={self._noise_floor:.3f})"
@@ -761,7 +764,7 @@ class LiveAudioPipeline:
 
         # Reject captures that are mostly silence/echo — avoids hallucination
         audio_rms = float(np.sqrt(np.mean(audio ** 2)))
-        if audio_rms < 0.010:
+        if audio_rms < 0.020:
             self._debug(f"Audio RMS {audio_rms:.4f} too low — skipping ASR")
             return None
 
