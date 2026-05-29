@@ -75,7 +75,8 @@ LOCAL_IP = get_local_ip(NETWORK_INTERFACE)
 print(f"[DEMO] Interface={NETWORK_INTERFACE}, local_ip={LOCAL_IP}")
 
 # ── DDS / SDK init ────────────────────────────────────────────────────────────
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
 from unitree_sdk2py.g1.arm.g1_arm_action_client import G1ArmActionClient, action_map
 from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
@@ -96,6 +97,27 @@ arm.Init()
 audio_client = AudioClient()
 audio_client.Init()
 audio_client.SetVolume(100)
+
+previous_f3 = 0
+is_active = False
+
+def low_state_handler(msg):
+    global previous_f3, is_active
+    wireless_remote = msg.wireless_remote
+    if len(wireless_remote) < 4:
+        return
+
+    f3_pressed = (wireless_remote[2] >> 7) & 1
+    if f3_pressed and not previous_f3:
+        is_active = not is_active
+        state_str = "ACTIVE" if is_active else "PAUSED"
+        print(f"\n[DEMO] Remote toggle: NLP code is now {state_str}")
+        if is_active:
+            print("[DEMO] Ready. Say 'Hey Daksh' to activate.")
+    previous_f3 = f3_pressed
+
+lowstate_subscriber = ChannelSubscriber("rt/lf/lowstate", LowState_)
+lowstate_subscriber.Init(low_state_handler, 10)
 
 # ── Mic activation ────────────────────────────────────────────────────────────
 voice_client = Client("voice", False)
@@ -329,14 +351,23 @@ def drain_queue():
             break
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
-print("\n[DEMO] Ready. Say 'Hey Daksh' to activate.\n")
+print("\n[DEMO] Initialized. Press F3 on the remote controller to START/STOP NLP listening.\n")
 
 while True:
+    if not is_active:
+        drain_queue()
+        time.sleep(0.1)
+        continue
+
     # PHASE 1: wait for wake word
     consec = 0
     _log_counter = 0
-    while True:
-        chunk = _audio_q.get()
+    wake_word_detected = False
+    while is_active:
+        try:
+            chunk = _audio_q.get(timeout=0.1)
+        except queue.Empty:
+            continue
 
         # Slide rolling buffer and append new chunk (converted to float32)
         chunk_f32 = chunk.astype(np.float32) / 32768.0
@@ -359,7 +390,12 @@ while True:
             print(f"[DEMO] Wake word! score={score:.3f}")
             # Reset rolling buffer so stale audio doesn't re-trigger
             _ww_buffer[:] = 0.0
+            wake_word_detected = True
             break
+            
+    if not wake_word_detected:
+        drain_queue()
+        continue
 
     drain_queue()
 
@@ -375,7 +411,7 @@ while True:
     deadline = time.time() + MAX_RECORD_SECONDS
 
     print(f"[DEMO] Listening for command (VAD, max {MAX_RECORD_SECONDS}s) ...")
-    while time.time() < deadline:
+    while time.time() < deadline and is_active:
         try:
             chunk = _audio_q.get(timeout=0.1)
         except queue.Empty:
