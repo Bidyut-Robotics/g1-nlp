@@ -436,6 +436,10 @@ while True:
                     print(f"[DEMO] VAD: speech ended ({len(frames)} chunks)")
                     break
 
+    if not is_active:
+        print("[DEMO] Cancelled listening (Paused via F3)")
+        continue
+
     if not frames:
         transcript = ""
     else:
