@@ -457,7 +457,11 @@ class LiveAudioPipeline:
             return False
 
         try:
-            samples = chunk[:self._vad_window_samples].astype(np.float32) / 32768.0
+            raw = chunk[:self._vad_window_samples]
+            if raw.dtype == np.int16:
+                samples = raw.astype(np.float32) / 32768.0
+            else:
+                samples = raw.astype(np.float32)
             tensor = torch.from_numpy(samples)
             with torch.no_grad():
                 prob = self.vad_model(tensor, 16000).item()
@@ -624,7 +628,7 @@ class LiveAudioPipeline:
             else:
                 consecutive_above = 0
 
-            if consecutive_above >= 4 and not self.interrupt_event.is_set():
+            if consecutive_above >= 2 and not self.interrupt_event.is_set():
                 self._debug(
                     f"[BARGE-IN] Energy trigger mic={mic_energy:.3f} "
                     f"threshold={dynamic_threshold:.3f} (floor={self._noise_floor:.3f})"
@@ -1028,37 +1032,13 @@ class LiveAudioPipeline:
                     self.wakeword_model.reset()
                     self.preroll_chunks.clear()
 
-                    # ── Sniff for inline question (500ms window) ──────────────
-                    # If user said "Hey Jarvis, what time is it?" in one breath,
-                    # the question audio arrives immediately after wake detection.
-                    # Collect it now; if speech is present skip the ack so PHASE 2
-                    # can process it without the ack TTS blocking the queue.
-                    _sniff_chunks = []
-                    _inline_speech = False
-                    _sniff_end = time.time() + 0.5
-                    while time.time() < _sniff_end:
-                        try:
-                            _c = self.audio_queue.get_nowait()
-                            _sniff_chunks.append(_c)
-                            if self._vad_is_speech(_c):
-                                _inline_speech = True
-                        except queue.Empty:
-                            await asyncio.sleep(0.01)
-
-                    # Put chunks back so PHASE 2 captures them
-                    for _c in _sniff_chunks:
-                        self.audio_queue.put_nowait(_c)
-
-                    # ── Acknowledge only when no inline question detected ──────
-                    if not _inline_speech:
-                        ack = "Yes? How can I help you?"
-                        print(f"[{self.wakeword_display}] {ack}")
-                        if self.tts is not None:
-                            self.is_speaking = True
-                            self._barge_in_suppress_until = time.time() + BARGE_IN_GRACE_SECONDS
-                            asyncio.create_task(self._play_tts(ack))
-                    else:
-                        print(f"[{self.wakeword_display}] Inline question detected — skipping ack.")
+                    # ── Acknowledge wake word ─────────────────────────────────
+                    ack = "Yes? How can I help you?"
+                    print(f"[{self.wakeword_display}] {ack}")
+                    if self.tts is not None:
+                        self.is_speaking = True
+                        self._barge_in_suppress_until = time.time() + BARGE_IN_GRACE_SECONDS
+                        asyncio.create_task(self._play_tts(ack))
 
                     last_interaction_at = [time.time()]  # List for pass-by-ref
 
