@@ -341,7 +341,8 @@ class LiveAudioPipeline:
 
         self.wakeword_threshold = float(os.getenv("WAKEWORD_THRESHOLD", ww_cfg.get("threshold", "0.5")))
         self.wakeword_display = os.getenv("WAKEWORD_DISPLAY", ww_cfg.get("display_name", "Jarvis"))
-        self.wakeword_min_consec = int(os.getenv("WAKEWORD_MIN_CONSEC", str(ww_cfg.get("min_consec", 2))))
+        self.wakeword_min_consec = int(os.getenv("WAKEWORD_MIN_CONSEC", str(ww_cfg.get("min_consec", 1))))
+        print(f"[WAKEWORD] threshold={self.wakeword_threshold}, min_consec={self.wakeword_min_consec}, key='{self.wakeword_key}'")
 
         # ── Silero VAD ────────────────────────────────────────────────────────
         print("[VAD] Loading Silero VAD...")
@@ -1002,9 +1003,11 @@ class LiveAudioPipeline:
                             max(scores.values(), default=0.0)
                         ))
 
-                        if score >= WAKEWORD_DEBUG_FLOOR:
+                        if score >= self.wakeword_threshold * 0.8:
+                            print(f"[WAKEWORD] score={score:.3f} consec={_ww_consec} threshold={self.wakeword_threshold}")
+                        elif score >= WAKEWORD_DEBUG_FLOOR:
                             self._debug(f"Wake score={score:.3f}, energy={energy:.4f}")
-                        elif self.debug_enabled and now - last_debug_at >= DEBUG_LOG_INTERVAL_SECONDS:
+                        if self.debug_enabled and now - last_debug_at >= DEBUG_LOG_INTERVAL_SECONDS:
                             self._debug(
                                 f"Standby: score={score:.3f}, energy={energy:.4f}, "
                                 f"queue={self.audio_queue.qsize()}"
