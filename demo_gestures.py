@@ -22,8 +22,8 @@ Requirements:
 #!/usr/bin/env python3
 import os
 
-# Fix for scikit-learn OpenMP TLS allocation error
-os.environ['LD_PRELOAD'] = '/home/unitree/miniconda3/envs/demo/lib/python3.10/site-packages/scikit_learn.libs/libgomp-947d5fa1.so.1.0.0'
+# Fix for scikit-learn OpenMP TLS allocation error (commented out as it's from a different environment)
+# os.environ['LD_PRELOAD'] = '/home/unitree/miniconda3/envs/demo/lib/python3.10/site-packages/scikit_learn.libs/libgomp-947d5fa1.so.1.0.0'
 
 import json
 import re
@@ -156,18 +156,24 @@ from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
 _ms_device     = "cuda" if torch.cuda.is_available() else "cpu"
 _ms_dtype      = torch.float16 if torch.cuda.is_available() else torch.float32
-_MS_MODEL_PATH = "./moonshine-streaming-medium"
 
-print(f"[DEMO] Loading Moonshine streaming-medium ({_ms_device}) ...")
+if os.path.exists("./moonshine-streaming-medium"):
+    _MS_MODEL_PATH = "./moonshine-streaming-medium"
+    _local_files_only = True
+else:
+    _MS_MODEL_PATH = "UsefulSensors/moonshine-streaming-medium"
+    _local_files_only = False
+
+print(f"[DEMO] Loading Moonshine streaming-medium ({_ms_device}) from {_MS_MODEL_PATH} ...")
 _ms_model = AutoModelForSpeechSeq2Seq.from_pretrained(
     _MS_MODEL_PATH,
     dtype=_ms_dtype,
-    local_files_only=True,
+    local_files_only=_local_files_only,
     trust_remote_code=True,
 ).to(_ms_device)
 _ms_proc = AutoProcessor.from_pretrained(
     _MS_MODEL_PATH,
-    local_files_only=True,
+    local_files_only=_local_files_only,
     trust_remote_code=True,
 )
 print("[DEMO] ASR ready.")
