@@ -61,7 +61,7 @@
     "backend": "livekit",
     "model": "models/hey_jarvis_kaggle.onnx",
     "display_name": "Jarvis",
-    "threshold": 0.5,
+    "threshold": 0.45,
     "min_consec": 1
   },
 
