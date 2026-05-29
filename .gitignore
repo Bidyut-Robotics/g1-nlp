@@ -59,4 +59,4 @@ Thumbs.db
 .system_generated/
 docs/
 
-cpp/build/
+cpp/build/.antigravitycli/
