@@ -205,31 +205,21 @@ def video_feed():
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 # --- Unitree Audio TTS Worker ---
-def tts_worker():
-    log.info(f"Initializing Unitree DDS Audio Client on interface {NETWORK_INTERFACE}...")
-    try:
-        ChannelFactoryInitialize(0, NETWORK_INTERFACE)
-        time.sleep(1.0)
-        audio_client = AudioClient()
-        audio_client.Init()
-        audio_client.SetVolume(100)
-        log.info("Unitree Audio Client Ready. Connected to G1 Speaker.")
-
-        while is_running:
-            try:
-                text = speech_queue.get(timeout=1)
-                log.info(f"Speaking: '{text}' on G1 Speaker...")
-                # 1 represents the voice type in TtsMaker
-                ret = audio_client.TtsMaker(text, 1)
-                if ret != 0:
-                    log.error(f"TtsMaker returned error code {ret}")
-                speech_queue.task_done()
-            except queue.Empty:
-                continue
-            except Exception as e:
-                log.error(f"TTS Worker Error: {e}")
-    except Exception as e:
-        log.error(f"Failed to initialize Unitree Audio Client: {e}")
+def tts_worker(audio_client):
+    log.info("TTS Worker Started. Waiting for speech commands...")
+    while is_running:
+        try:
+            text = speech_queue.get(timeout=1)
+            log.info(f"Speaking: '{text}' on G1 Speaker...")
+            # 1 represents the voice type in TtsMaker
+            ret = audio_client.TtsMaker(text, 1)
+            if ret != 0:
+                log.error(f"TtsMaker returned error code {ret}")
+            speech_queue.task_done()
+        except queue.Empty:
+            continue
+        except Exception as e:
+            log.error(f"TTS Worker Error: {e}")
 
 # --- ZMQ Receiver Worker ---
 def zmq_receiver_worker():
@@ -276,6 +266,19 @@ def main():
         log.error(f"Failed to load encodings: {e}")
         return
 
+    # Initialize DDS Audio Client in main thread to prevent C++ thread stack overflow
+    log.info(f"Initializing Unitree DDS Audio Client on interface {NETWORK_INTERFACE}...")
+    try:
+        ChannelFactoryInitialize(0, NETWORK_INTERFACE)
+        time.sleep(0.5)
+        audio_client = AudioClient()
+        audio_client.Init()
+        audio_client.SetVolume(100)
+        log.info("Unitree Audio Client Ready. Connected to G1 Speaker.")
+    except Exception as e:
+        log.error(f"Failed to initialize Unitree Audio Client: {e}")
+        return
+
     # Initialize InsightFace in the main thread to prevent Jetson buffer overflows
     log.info("Loading InsightFace ONNX Models in main thread...")
     face_app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
@@ -283,7 +286,7 @@ def main():
 
     # Start Background Workers
     threading.Thread(target=zmq_receiver_worker, daemon=True).start()
-    threading.Thread(target=tts_worker, daemon=True).start()
+    threading.Thread(target=tts_worker, args=(audio_client,), daemon=True).start()
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000, use_reloader=False), daemon=True).start()
 
     log.info("G1 Face Greeting System Started.")
