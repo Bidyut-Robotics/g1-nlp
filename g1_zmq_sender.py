@@ -10,8 +10,33 @@ import sys
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
 
-def tts_worker(context):
-    print("[INFO] Starting Unitree DDS Audio Client on Robot...")
+def tts_worker(context, audio_client):
+    tts_socket = context.socket(zmq.REP)
+    tts_socket.bind("tcp://0.0.0.0:5556")
+    print("[INFO] ZMQ Network REP socket listening for TTS on port 5556.")
+
+    while True:
+        try:
+            message = tts_socket.recv_string()
+            print(f"[INFO] Received TTS command from Thor: '{message}'")
+            
+            ret = audio_client.TtsMaker(message, 1)
+            if ret != 0:
+                print(f"[ERROR] TtsMaker returned error code {ret}")
+                
+            # Send acknowledgment back to Thor
+            tts_socket.send_string("OK")
+        except Exception as e:
+            print(f"[ERROR] TTS ZMQ Error: {e}")
+            time.sleep(1)
+
+def main():
+    print("="*50)
+    print("Starting G1 Camera ZMQ Streamer & TTS Listener")
+    print("="*50)
+
+    # Initialize DDS on Main Thread!
+    print("[INFO] Starting Unitree DDS Audio Client on Robot (Main Thread)...")
     interface = sys.argv[1] if len(sys.argv) > 1 else "eth0"
     try:
         ChannelFactoryInitialize(0, interface)
@@ -23,32 +48,12 @@ def tts_worker(context):
     except Exception as e:
         print(f"[ERROR] Could not start Audio Client: {e}")
         return
-
-    tts_socket = context.socket(zmq.REP)
-    tts_socket.bind("tcp://0.0.0.0:5556")
-    print("[INFO] ZMQ Network REP socket listening for TTS on port 5556.")
-
-    while True:
-        try:
-            message = tts_socket.recv_string()
-            print(f"[INFO] Received TTS command from Thor: '{message}'")
-            audio_client.TtsMaker(message, 1)
-            # Send acknowledgment back to Thor
-            tts_socket.send_string("OK")
-        except Exception as e:
-            print(f"[ERROR] TTS ZMQ Error: {e}")
-            time.sleep(1)
-
-def main():
-    print("="*50)
-    print("Starting G1 Camera ZMQ Streamer & TTS Listener")
-    print("="*50)
     
     # Setup ZMQ Context
     context = zmq.Context()
     
     # Start TTS background listener thread
-    threading.Thread(target=tts_worker, args=(context,), daemon=True).start()
+    threading.Thread(target=tts_worker, args=(context, audio_client), daemon=True).start()
 
     # Setup ZMQ Publisher for Camera frames
     socket = context.socket(zmq.PUB)
