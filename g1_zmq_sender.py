@@ -24,15 +24,17 @@ def tts_worker(context):
         print(f"[ERROR] Could not start Audio Client: {e}")
         return
 
-    tts_socket = context.socket(zmq.PULL)
+    tts_socket = context.socket(zmq.REP)
     tts_socket.bind("tcp://0.0.0.0:5556")
-    print("[INFO] ZMQ Network PULL socket listening for TTS on port 5556.")
+    print("[INFO] ZMQ Network REP socket listening for TTS on port 5556.")
 
     while True:
         try:
             message = tts_socket.recv_string()
             print(f"[INFO] Received TTS command from Thor: '{message}'")
             audio_client.TtsMaker(message, 1)
+            # Send acknowledgment back to Thor
+            tts_socket.send_string("OK")
         except Exception as e:
             print(f"[ERROR] TTS ZMQ Error: {e}")
             time.sleep(1)

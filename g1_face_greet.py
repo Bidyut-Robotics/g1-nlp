@@ -76,7 +76,9 @@ is_running = True
 
 # Global ZMQ Context
 context = zmq.Context()
-tts_socket = context.socket(zmq.PUSH)
+
+# Thread-safe queue for speech commands
+speech_queue = queue.Queue()
 
 # --- Flask Server Logic ---
 def generate_frames():
@@ -124,6 +126,37 @@ def zmq_receiver_worker():
             log.error(f"ZMQ Error: {e}")
             time.sleep(1)
 
+def tts_sender_worker():
+    socket = context.socket(zmq.REQ)
+    socket.setsockopt(zmq.RCVTIMEO, 2000) # 2 second timeout
+    log.info(f"Connecting to Robot TTS Socket at {ZMQ_TTS_URL}...")
+    socket.connect(ZMQ_TTS_URL)
+    
+    while is_running:
+        try:
+            # Wait for a message to speak
+            msg = speech_queue.get(timeout=1)
+            try:
+                socket.send_string(msg)
+                # Wait for acknowledgment
+                ack = socket.recv_string()
+                log.info(f"Robot acknowledged TTS: {ack}")
+            except zmq.Again:
+                log.error("Robot TTS socket timed out! Is the robot script running?")
+                # Reset socket to clear the REQ state machine
+                socket.close()
+                socket = context.socket(zmq.REQ)
+                socket.setsockopt(zmq.RCVTIMEO, 2000)
+                socket.connect(ZMQ_TTS_URL)
+            except Exception as e:
+                log.error(f"Failed to send TTS ZMQ message: {e}")
+                
+            speech_queue.task_done()
+        except queue.Empty:
+            continue
+        except Exception as e:
+            log.error(f"TTS Sender Worker Error: {e}")
+
 def compute_cosine_distance(emb1, emb2):
     return 1 - np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2))
 
@@ -149,11 +182,8 @@ def main():
     face_app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
     face_app.prepare(ctx_id=0, det_size=(640, 640))
 
-    # Connect TTS Socket to Robot
-    log.info(f"Connecting to Robot TTS Socket at {ZMQ_TTS_URL}...")
-    tts_socket.connect(ZMQ_TTS_URL)
-    
     threading.Thread(target=zmq_receiver_worker, daemon=True).start()
+    threading.Thread(target=tts_sender_worker, daemon=True).start()
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000, use_reloader=False), daemon=True).start()
 
     log.info("G1 Distributed Face Greeting System Started.")
@@ -192,11 +222,8 @@ def main():
                             
                             if name not in last_greeted or (now - last_greeted[name]) > GREET_COOLDOWN:
                                 msg = f"Hello, {name}! Good to see you."
-                                log.info(f"RECOGNISED: {name}. Sending TTS command to Robot: '{msg}'")
-                                try:
-                                    tts_socket.send_string(msg)
-                                except Exception as e:
-                                    log.error(f"Failed to send TTS ZMQ message: {e}")
+                                log.info(f"RECOGNISED: {name}. Queuing TTS command to Robot...")
+                                speech_queue.put(msg)
                                 last_greeted[name] = now
 
                         color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
