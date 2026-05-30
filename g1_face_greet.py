@@ -92,12 +92,8 @@ def zmq_receiver_worker():
 def compute_cosine_distance(emb1, emb2):
     return 1 - np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2))
 
-def detection_worker(recognition_data):
+def detection_worker(recognition_data, face_app):
     global detected_faces, is_running
-    
-    log.info("Loading InsightFace ONNX Models...")
-    face_app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
-    face_app.prepare(ctx_id=0, det_size=(640, 640))
     
     last_greeted = {}
     
@@ -173,10 +169,15 @@ def main():
         log.error(f"Failed to load encodings: {e}")
         return
 
+    # Initialize InsightFace in the main thread to prevent Jetson buffer overflows
+    log.info("Loading InsightFace ONNX Models in main thread...")
+    face_app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
+    face_app.prepare(ctx_id=0, det_size=(640, 640))
+
     # Start Workers
     threading.Thread(target=zmq_receiver_worker, daemon=True).start()
     threading.Thread(target=tts_worker, daemon=True).start()
-    threading.Thread(target=detection_worker, args=(recognition_data,), daemon=True).start()
+    threading.Thread(target=detection_worker, args=(recognition_data, face_app), daemon=True).start()
 
     log.info("G1 Face Greeting System Started. Press 'q' on the video window or Ctrl+C to quit.")
 
