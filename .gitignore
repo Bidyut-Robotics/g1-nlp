@@ -54,9 +54,26 @@ records/
 .DS_Store
 Thumbs.db
 
-# Project Specific
-.codex
-.system_generated/
-docs/
+# ==================== AGENT / CODING TOOLS ====================
 
+# Skills.sh & Agy CLI
+.skills/
+.antigravity/
+.ag/
+.skills.json
+.antigravity.json
+
+# Gemini CLI / MCP related
+.mcp/
+gemini/
+.next-devtools/
+
+# General Coding Agent Folders
+.agent/
+.ai/
+.codex/
+.system_generated/
+
+# Project Specific
+docs/
 cpp/build/.antigravitycli/
