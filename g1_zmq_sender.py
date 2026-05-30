@@ -20,12 +20,17 @@ def tts_worker(context, audio_client):
             message = tts_socket.recv_string()
             print(f"[INFO] Received TTS command from Thor: '{message}'")
             
+            # Send acknowledgment back to Thor IMMEDIATELY so it doesn't timeout
+            tts_socket.send_string("OK")
+
             ret = audio_client.TtsMaker(message, 1)
             if ret != 0:
                 print(f"[ERROR] TtsMaker returned error code {ret}")
                 
-            # Send acknowledgment back to Thor
-            tts_socket.send_string("OK")
+            # MAGIC FIX: The audio service requires a pause to actually play the audio 
+            # before the thread blocks again on ZMQ recv_string! (Mirrors demo_gestures.py)
+            time.sleep(3.0)
+            
         except Exception as e:
             print(f"[ERROR] TTS ZMQ Error: {e}")
             time.sleep(1)
