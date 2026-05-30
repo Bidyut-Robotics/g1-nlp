@@ -1,23 +1,43 @@
-#!/usr/bin/env python3
 import os
 import sys
+import time
+import logging
+import threading
+import queue
+import pickle
+import numpy as np
+from pathlib import Path
+from flask import Flask, Response, render_template_string
 
-# ALWAYS IMPORT UNITREE DDS FIRST on Jetson to prevent Thread-Local Storage (TLS) buffer overflows
-# when mixed with OpenCV or ONNX Runtime's OpenMP!
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger(__name__)
+
+NETWORK_INTERFACE = sys.argv[1] if len(sys.argv) > 1 else "eth0"
+
+# ==============================================================================
+# CRITICAL JETSON FIX:
+# We MUST initialize the Unitree DDS library *BEFORE* importing OpenCV or InsightFace.
+# Otherwise, OpenMP exhausts the Static TLS block and causes a buffer overflow!
+# ==============================================================================
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
 
+log.info(f"Initializing Unitree DDS Audio Client on interface {NETWORK_INTERFACE}...")
+try:
+    ChannelFactoryInitialize(0, NETWORK_INTERFACE)
+    time.sleep(0.5)
+    GLOBAL_AUDIO_CLIENT = AudioClient()
+    GLOBAL_AUDIO_CLIENT.Init()
+    GLOBAL_AUDIO_CLIENT.SetVolume(100)
+    log.info("Unitree Audio Client Ready. Connected to G1 Speaker.")
+except Exception as e:
+    log.error(f"Failed to initialize Unitree Audio Client: {e}")
+    sys.exit(1)
+
+# Now it is safe to import the heavy ML libraries
 import cv2
-import pickle
-import time
-import logging
-import numpy as np
-import threading
-import queue
 import zmq
-from pathlib import Path
 from insightface.app import FaceAnalysis
-from flask import Flask, Response, render_template_string
 
 app = Flask(__name__)
 
@@ -167,9 +187,6 @@ RECOGNITION_THRESHOLD = 0.50
 FRAME_SCALE = 0.5
 GREET_COOLDOWN = 60
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger(__name__)
-
 # Global state
 latest_frame_bytes = None
 latest_annotated_frame = None
@@ -268,19 +285,6 @@ def main():
         log.error(f"Failed to load encodings: {e}")
         return
 
-    # Initialize DDS Audio Client in main thread to prevent C++ thread stack overflow
-    log.info(f"Initializing Unitree DDS Audio Client on interface {NETWORK_INTERFACE}...")
-    try:
-        ChannelFactoryInitialize(0, NETWORK_INTERFACE)
-        time.sleep(0.5)
-        audio_client = AudioClient()
-        audio_client.Init()
-        audio_client.SetVolume(100)
-        log.info("Unitree Audio Client Ready. Connected to G1 Speaker.")
-    except Exception as e:
-        log.error(f"Failed to initialize Unitree Audio Client: {e}")
-        return
-
     # Initialize InsightFace in the main thread to prevent Jetson buffer overflows
     log.info("Loading InsightFace ONNX Models in main thread...")
     face_app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
@@ -288,7 +292,7 @@ def main():
 
     # Start Background Workers
     threading.Thread(target=zmq_receiver_worker, daemon=True).start()
-    threading.Thread(target=tts_worker, args=(audio_client,), daemon=True).start()
+    threading.Thread(target=tts_worker, args=(GLOBAL_AUDIO_CLIENT,), daemon=True).start()
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000, use_reloader=False), daemon=True).start()
 
     log.info("G1 Face Greeting System Started.")
