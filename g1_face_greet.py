@@ -70,6 +70,18 @@ HTML_TEMPLATE = """
 # buffer overflow / TLS conflicts between ONNX Runtime and Unitree CycloneDDS.
 # ==============================================================================
 def tts_worker_process(interface, text_queue):
+    # ==============================================================================
+    # MAGIC JETSON FIX: Importing PyTorch / Numpy forces Linux's dynamic linker 
+    # to allocate a massive Static TLS (Thread-Local Storage) memory block. 
+    # Without this, CycloneDDS crashes instantly with 'buffer overflow detected' 
+    # because it runs out of memory for its own network threads!
+    # ==============================================================================
+    try:
+        import torch
+        import numpy as np
+    except ImportError:
+        pass # Ignore if not installed, but it should be in nlp-env
+
     import time
     import logging
     log = logging.getLogger("TTS_Process")
