@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 import os
 import sys
+
+# ALWAYS IMPORT UNITREE DDS FIRST on Jetson to prevent Thread-Local Storage (TLS) buffer overflows
+# when mixed with OpenCV or ONNX Runtime's OpenMP!
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize
+from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
+
 import cv2
 import pickle
 import time
@@ -146,10 +152,6 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
-
-# Unitree SDK2 Audio Client for DDS TTS
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize
-from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
 
 # Configurations
 G1_IP = "192.168.123.164"
