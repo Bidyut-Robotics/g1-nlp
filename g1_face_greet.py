@@ -3,15 +3,14 @@ import os
 import sys
 
 # ==============================================================================
-# JETSON NUCLEAR FIX 1: Auto-Preload libgomp.so.1
-# If the library exists, restart the script with it preloaded into Linux memory.
-# This completely bypasses the glibc Static TLS exhaustion bug before Python even boots.
+# JETSON NUCLEAR FIX 1: Auto-Preload Conda's libgomp.so.1
 # ==============================================================================
-LIBGOMP_PATH = "/usr/lib/aarch64-linux-gnu/libgomp.so.1"
-if os.path.exists(LIBGOMP_PATH):
+# We must preload the libgomp from the *Conda environment*, not the system!
+CONDA_LIBGOMP = os.path.join(sys.prefix, "lib", "libgomp.so.1")
+if os.path.exists(CONDA_LIBGOMP):
     if "LD_PRELOAD" not in os.environ or "libgomp.so.1" not in os.environ["LD_PRELOAD"]:
-        print(f"[JETSON FIX] Auto-restarting with LD_PRELOAD={LIBGOMP_PATH}")
-        os.environ["LD_PRELOAD"] = LIBGOMP_PATH
+        print(f"[JETSON FIX] Auto-restarting with Conda LD_PRELOAD={CONDA_LIBGOMP}")
+        os.environ["LD_PRELOAD"] = CONDA_LIBGOMP
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
 import time
@@ -21,6 +20,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger(__name__)
 
 NETWORK_INTERFACE = sys.argv[1] if len(sys.argv) > 1 else "eth0"
+
+# Restrict CycloneDDS to the exact network interface to avoid discovery crashes
+os.environ["CYCLONEDDS_URI"] = f"<CycloneDDS><Domain><General><NetworkInterfaceAddress>{NETWORK_INTERFACE}</NetworkInterfaceAddress></General></Domain></CycloneDDS>"
 
 # ==============================================================================
 # JETSON NUCLEAR FIX 2: Strict execution order cloning of `demo_gestures.py`
